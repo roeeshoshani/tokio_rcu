@@ -1,6 +1,11 @@
 use std::{
     cell::Cell,
-    sync::atomic::{self, AtomicU32},
+    marker::PhantomData,
+    ops::Deref,
+    sync::{
+        Arc,
+        atomic::{self, AtomicPtr, AtomicU32, AtomicUsize},
+    },
 };
 
 use index_type::{IndexType, array::TypedArray};
@@ -126,6 +131,80 @@ fn allocate_storage_slot(initial_epoch_id: EpochId) -> StorageSlotId {
 fn free_storage_slot(slot_id: StorageSlotId) {
     // TODO: ordering
     PER_THREAD_LAST_SEEN_EPOCH_ID[slot_id].store(0, atomic::Ordering::Relaxed);
+}
+
+fn is_send<T: Send>() {}
+
+/// a phantom type which is not `Send` and also not `Sync`.
+pub struct PhantomUnsendUnsync {
+    phantom: PhantomData<*const ()>,
+}
+impl PhantomUnsendUnsync {
+    pub const fn new() -> Self {
+        Self {
+            phantom: PhantomData,
+        }
+    }
+}
+
+pub struct RcuReadGuard<'a, T> {
+    value: &'a T,
+    _phantom: PhantomUnsendUnsync,
+}
+impl<'a, T> Deref for RcuReadGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.value
+    }
+}
+
+pub struct Rcu<T> {
+    value_ptr: AtomicPtr<T>,
+}
+impl<T> Rcu<T> {
+    pub fn new(value: T) -> Self {
+        Self {
+            value_ptr: AtomicPtr::new(Box::leak(Box::new(value))),
+        }
+    }
+
+    pub fn read(&self) -> RcuReadGuard<'_, T> {
+        // TODO: ordering
+        let ptr = self.value_ptr.load(atomic::Ordering::Relaxed);
+
+        RcuReadGuard {
+            // SAFETY: TODO
+            value: unsafe { &*ptr },
+            _phantom: PhantomUnsendUnsync::new(),
+        }
+    }
+
+    pub async fn swap(&self, new_value: T) -> T {
+        let new_value_ptr = Box::leak(Box::new(new_value));
+
+        // TODO: ordering
+        let old_value_ptr = self
+            .value_ptr
+            .swap(new_value_ptr, atomic::Ordering::Relaxed);
+
+        // wait for all previous readers to stop using the old value
+        synchronize_rcu().await;
+
+        // SAFETY: TODO
+        let boxed_value = unsafe { Box::from_raw(old_value_ptr) };
+
+        *boxed_value
+    }
+}
+impl<T> Drop for Rcu<T> {
+    fn drop(&mut self) {
+        // TODO: ordering
+        let ptr = self.value_ptr.load(atomic::Ordering::Relaxed);
+
+        // SAFETY: TODO
+        let _ = unsafe { Box::from_raw(ptr) };
+    }
 }
 
 fn main() {
