@@ -4,3 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+index_type = "0.7.1"
+
+[dev-dependencies]
+tokio = { version = "1.53.1", features = ["full"] }
