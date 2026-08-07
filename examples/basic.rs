@@ -81,7 +81,8 @@ async fn synchronize_rcu() {
         if PER_THREAD_LAST_SEEN_EPOCH_ID
             .iter()
             .all(|thread_last_seen_epoch_id| {
-                thread_last_seen_epoch_id.load(atomic::Ordering::Relaxed) >= new_epoch_id
+                let value = thread_last_seen_epoch_id.load(atomic::Ordering::Relaxed);
+                value == 0 || value >= new_epoch_id
             })
         {
             // all threads saw our new epoch id, we are done waiting
@@ -250,11 +251,14 @@ fn main() {
                     let data = data.clone();
                     async move {
                         loop {
-                            let value = data.read();
-                            println!("{}", *value);
-                            if *value != orig_string {
-                                break;
+                            {
+                                let value = data.read();
+                                println!("{}", *value);
+                                if *value != orig_string {
+                                    break;
+                                }
                             }
+                            tokio::time::sleep(Duration::from_secs(0)).await;
                         }
                     }
                 })
@@ -262,6 +266,10 @@ fn main() {
             .collect();
         tokio::time::sleep(Duration::from_secs(1)).await;
         let old_string = data.swap("It works!").await;
+        tokio::time::sleep(Duration::from_secs(1)).await;
         println!("old string {:?}", old_string);
+        for task in tasks {
+            task.await.unwrap();
+        }
     })
 }
