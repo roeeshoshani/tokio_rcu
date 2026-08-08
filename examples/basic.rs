@@ -16,28 +16,47 @@ pub type EpochId = u32;
 pub type EpochIdAtomic = AtomicU32;
 
 #[derive(IndexType, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-struct StorageSlotId(u16);
+struct ThreadStorageSlotId(u16);
 
-struct StorageSlotValue {
+type EncodedThreadStateIntTy = u32;
+struct EncodedThreadState(EncodedThreadStateIntTy);
+impl EncodedThreadState {
+    fn decode(self) -> Option<ThreadState> {
+        todo!()
+    }
+}
+
+struct ThreadState {
+    last_seen_epoch_id: EpochId,
+    is_busy: bool,
+}
+impl ThreadState {
+    fn encode(self) -> EncodedThreadState {}
+}
+
+struct ThreadStorageSlotValue {
     atomic: EpochIdAtomic,
 }
 
 const MAX_CONCURRENT_THREADS: usize = 4096;
 
-static CUR_EPOCH_ID: EpochIdAtomic = EpochIdAtomic::new(1);
+static CUR_EPOCH_ID: EpochIdAtomic = EpochIdAtomic::new(2);
 static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::const_new();
 
-static STORAGE_SLOTS: TypedArray<StorageSlotId, StorageSlotValue, MAX_CONCURRENT_THREADS> =
-    TypedArray::from_array(
-        [const {
-            StorageSlotValue {
-                atomic: EpochIdAtomic::new(0),
-            }
-        }; MAX_CONCURRENT_THREADS],
-    );
+static THREAD_STORAGE_SLOTS: TypedArray<
+    ThreadStorageSlotId,
+    ThreadStorageSlotValue,
+    MAX_CONCURRENT_THREADS,
+> = TypedArray::from_array(
+    [const {
+        ThreadStorageSlotValue {
+            atomic: EpochIdAtomic::new(0),
+        }
+    }; MAX_CONCURRENT_THREADS],
+);
 
 thread_local! {
-    static STORAGE_SLOT_ID: Cell<StorageSlotId> = const { Cell::new(StorageSlotId(0)) };
+    static THREAD_STORAGE_SLOT_ID: Cell<ThreadStorageSlotId> = const { Cell::new(ThreadStorageSlotId(0)) };
 }
 
 /// increments the epoch id, returning the new epoch id after the increment.
@@ -85,7 +104,7 @@ async fn synchronize_rcu() {
         // check if all threads have seen our new epoch id
         //
         // TODO: what if the epoch id overflows? we may get stuck in an infinite loop.
-        if STORAGE_SLOTS.iter().all(|storage_slot| {
+        if THREAD_STORAGE_SLOTS.iter().all(|storage_slot| {
             let value = storage_slot.atomic.load(atomic::Ordering::Relaxed);
 
             if value == 0 {
@@ -105,8 +124,8 @@ async fn synchronize_rcu() {
     }
 }
 
-fn try_allocate_storage_slot(thread_epoch_id: EpochId) -> Option<StorageSlotId> {
-    for (slot_id, slot) in STORAGE_SLOTS.iter_enumerated() {
+fn try_allocate_storage_slot(thread_epoch_id: EpochId) -> Option<ThreadStorageSlotId> {
+    for (slot_id, slot) in THREAD_STORAGE_SLOTS.iter_enumerated() {
         // TODO: ordering
         // TODO: is the initial load needed? does it improve performance over just immediately trying compare exchange?
         if slot.atomic.load(atomic::Ordering::Relaxed) == 0 {
@@ -129,7 +148,7 @@ fn try_allocate_storage_slot(thread_epoch_id: EpochId) -> Option<StorageSlotId> 
     }
     None
 }
-fn allocate_storage_slot(initial_epoch_id: EpochId) -> StorageSlotId {
+fn allocate_storage_slot(initial_epoch_id: EpochId) -> ThreadStorageSlotId {
     const MAX_ATTEMPTS: usize = 16;
 
     for _ in 0..MAX_ATTEMPTS {
@@ -140,9 +159,9 @@ fn allocate_storage_slot(initial_epoch_id: EpochId) -> StorageSlotId {
 
     panic!("too many concurrent threads, failed to allocate a storage slot for a new thread");
 }
-fn free_storage_slot(slot_id: StorageSlotId) {
+fn free_storage_slot(slot_id: ThreadStorageSlotId) {
     // TODO: ordering
-    STORAGE_SLOTS[slot_id]
+    THREAD_STORAGE_SLOTS[slot_id]
         .atomic
         .store(0, atomic::Ordering::Relaxed);
 }
@@ -228,20 +247,20 @@ fn main() {
             // TODO: ordering
             let initial_epoch_id = CUR_EPOCH_ID.load(atomic::Ordering::Relaxed);
             let slot_id = allocate_storage_slot(initial_epoch_id);
-            STORAGE_SLOT_ID.set(slot_id);
+            THREAD_STORAGE_SLOT_ID.set(slot_id);
         })
         .on_thread_stop(|| {
-            let slot_id = STORAGE_SLOT_ID.get();
+            let slot_id = THREAD_STORAGE_SLOT_ID.get();
             free_storage_slot(slot_id);
         })
         .on_before_task_poll(|_| {
-            let slot_id = STORAGE_SLOT_ID.get();
+            let slot_id = THREAD_STORAGE_SLOT_ID.get();
 
             // TODO: ordering
             let cur_epoch_id = CUR_EPOCH_ID.load(atomic::Ordering::Relaxed);
 
             // TODO: ordering
-            let prev_epoch_id = STORAGE_SLOTS[slot_id]
+            let prev_epoch_id = THREAD_STORAGE_SLOTS[slot_id]
                 .atomic
                 .swap(cur_epoch_id | 1, atomic::Ordering::Relaxed);
 
@@ -251,11 +270,11 @@ fn main() {
             }
         })
         .on_after_task_poll(|_| {
-            let slot_id = STORAGE_SLOT_ID.get();
+            let slot_id = THREAD_STORAGE_SLOT_ID.get();
 
             // unset the "in progress" bit for this thread
             // TODO: ordering
-            STORAGE_SLOTS[slot_id]
+            THREAD_STORAGE_SLOTS[slot_id]
                 .atomic
                 .fetch_xor(1, atomic::Ordering::Relaxed);
         })
