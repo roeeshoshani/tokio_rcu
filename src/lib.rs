@@ -95,11 +95,15 @@ impl<T> Rcu<T> {
     }
 
     pub fn read(&self) -> RcuReadGuard<'_, T> {
-        // TODO: ordering
-        let ptr = self.value_ptr.load(atomic::Ordering::Relaxed);
+        let ptr = self.value_ptr.load(
+            // we want acquire ordering to make sure that the write to the pointed-at data happens before the
+            // write of the pointer itself, so that when we use the loaded pointer, we are guaranteed to get
+            // a valid object.
+            atomic::Ordering::Acquire,
+        );
 
         RcuReadGuard {
-            // SAFETY: TODO
+            // SAFETY: pointers are always valid by the invariants of this type.
             value: unsafe { &*ptr },
             _phantom: PhantomUnsendUnsync::new(),
         }
@@ -109,14 +113,23 @@ impl<T> Rcu<T> {
         let new_value_ptr = Box::leak(Box::new(new_value));
 
         // TODO: ordering
-        let old_value_ptr = self
-            .value_ptr
-            .swap(new_value_ptr, atomic::Ordering::Relaxed);
+        let old_value_ptr = self.value_ptr.swap(
+            new_value_ptr,
+            // for the store part, we want release ordering since we want to make sure that the write of
+            // the pointed-at data to memory happen before the store of the pointer itself for everyone
+            // who loads this with acquire ordering.
+            //
+            // for the load part, we want acquire ordering to make sure that the write to the pointed-at
+            // data happens before the write of the pointer itself, so that when we use the loaded pointer,
+            // we are guaranteed to get a valid object. this is important since we actually use the old
+            // pointer to get back the old value.
+            atomic::Ordering::AcqRel,
+        );
 
         // wait for all previous readers to stop using the old value
         synchronize_rcu().await;
 
-        // SAFETY: TODO
+        // SAFETY: pointers are always valid by the invariants of this type.
         let boxed_value = unsafe { Box::from_raw(old_value_ptr) };
 
         *boxed_value
@@ -124,10 +137,14 @@ impl<T> Rcu<T> {
 }
 impl<T> Drop for Rcu<T> {
     fn drop(&mut self) {
-        // TODO: ordering
-        let ptr = self.value_ptr.load(atomic::Ordering::Relaxed);
+        let ptr = self.value_ptr.load(
+            // we want acquire ordering to make sure that the write to the pointed-at data happens before the
+            // write of the pointer itself, so that when we use the loaded pointer, we are guaranteed to get
+            // a valid object.
+            atomic::Ordering::Acquire,
+        );
 
-        // SAFETY: TODO
+        // SAFETY: pointers are always valid by the invariants of this type.
         let _ = unsafe { Box::from_raw(ptr) };
     }
 }
