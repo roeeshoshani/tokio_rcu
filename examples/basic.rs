@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{io::Write, sync::Arc, time::Duration};
 
 use tokio_rcu::Rcu;
 
@@ -21,17 +21,18 @@ fn main() {
         .unwrap();
 
     rt.block_on(async {
-        let orig_string = "Hello, world!";
+        let orig_string = "Hello, world!\n";
         let data = Arc::new(Rcu::new(orig_string));
-        let tasks: Vec<_> = (0..1)
+        let tasks: Vec<_> = (0..100)
             .map(|_| {
                 tokio::spawn({
                     let data = data.clone();
                     async move {
+                        let mut stdout = std::io::stdout();
                         loop {
                             {
                                 let value = data.read();
-                                println!("{}", *value);
+                                stdout.write_all(value.as_bytes()).unwrap();
                                 if *value != orig_string {
                                     break;
                                 }
@@ -43,7 +44,7 @@ fn main() {
             })
             .collect();
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let old_string = data.swap("It works!").await;
+        let old_string = data.swap("It works!\n").await;
         tokio::time::sleep(Duration::from_secs(1)).await;
         println!("old string {:?}", old_string);
         for task in tasks {
