@@ -1,6 +1,6 @@
 use std::sync::atomic::AtomicU32;
 
-pub type Atomic<T: HasAtomicType> = T::AtomicType;
+pub type Atomic<T> = <T as HasAtomicType>::AtomicType;
 
 pub trait HasAtomicType {
     type AtomicType;

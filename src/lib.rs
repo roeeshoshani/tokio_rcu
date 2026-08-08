@@ -10,7 +10,7 @@ use crate::{
     epoch::{epoch_id_get_cur, epoch_id_inc},
     per_thread_storage::{
         ThreadStorageSlotId, ThreadStorageSlotValue, thread_storage_slot_alloc,
-        thread_storage_slot_get, thread_storage_slot_get_all,
+        thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
     utils::PhantomUnsendUnsync,
@@ -146,6 +146,8 @@ pub fn on_thread_start() {
 }
 
 pub fn on_thread_stop() {
+    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
+    thread_storage_slot_free(storage_slot_id);
     THREAD_STORAGE_SLOT.set(None);
 }
 
@@ -159,7 +161,7 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
         ThreadState {
             // TODO: ordering
             last_seen_epoch_id: new_seen_epoch_id,
-            is_busy: true,
+            is_busy,
         }
         .encode(),
         // TODO: ordering
