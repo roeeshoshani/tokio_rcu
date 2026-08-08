@@ -4,7 +4,7 @@ use std::{
     ops::Deref,
     sync::{
         Arc,
-        atomic::{self, AtomicPtr, AtomicU32, AtomicUsize},
+        atomic::{self, AtomicPtr, AtomicU32},
     },
     time::Duration,
 };
@@ -16,18 +16,25 @@ pub type EpochId = u32;
 pub type EpochIdAtomic = AtomicU32;
 
 #[derive(IndexType, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
-pub struct StorageSlotId(u16);
+struct StorageSlotId(u16);
+
+struct StorageSlotValue {
+    atomic: EpochIdAtomic,
+}
 
 const MAX_CONCURRENT_THREADS: usize = 4096;
 
 static CUR_EPOCH_ID: EpochIdAtomic = EpochIdAtomic::new(1);
 static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::const_new();
 
-static PER_THREAD_LAST_SEEN_EPOCH_ID: TypedArray<
-    StorageSlotId,
-    EpochIdAtomic,
-    MAX_CONCURRENT_THREADS,
-> = TypedArray::from_array([const { EpochIdAtomic::new(0) }; MAX_CONCURRENT_THREADS]);
+static STORAGE_SLOTS: TypedArray<StorageSlotId, StorageSlotValue, MAX_CONCURRENT_THREADS> =
+    TypedArray::from_array(
+        [const {
+            StorageSlotValue {
+                atomic: EpochIdAtomic::new(0),
+            }
+        }; MAX_CONCURRENT_THREADS],
+    );
 
 thread_local! {
     static STORAGE_SLOT_ID: Cell<StorageSlotId> = const { Cell::new(StorageSlotId(0)) };
@@ -36,27 +43,27 @@ thread_local! {
 /// increments the epoch id, returning the new epoch id after the increment.
 fn increment_epoch_id() -> EpochId {
     // TODO: ordering
-    let orig = CUR_EPOCH_ID.fetch_add(1, atomic::Ordering::Relaxed);
+    let orig = CUR_EPOCH_ID.fetch_add(2, atomic::Ordering::Relaxed);
 
-    if orig != EpochId::MAX {
-        // SAFETY: we know that this will not overflow since the value is less than the max
-        return unsafe { orig.unchecked_add(1) };
+    if orig != (EpochId::MAX - 1) {
+        // SAFETY: we know that this will not overflow since the value is less than the value which will cause overflow when adding 2.
+        return unsafe { orig.unchecked_add(2) };
     }
 
     // epoch id 0 is reserved, so try incrementing again if we reach 0
     // TODO: ordering
-    let orig = CUR_EPOCH_ID.fetch_add(1, atomic::Ordering::Relaxed);
-    if orig == EpochId::MAX {
-        // if we reached 0 again, it means that during the short time between the first increment and the second, `EpochId::MAX` increments
-        // were concurrently performed. this is expected to be a very large number, so this is so unlikely that we expect it to never
-        // happen.
+    let orig = CUR_EPOCH_ID.fetch_add(2, atomic::Ordering::Relaxed);
+    if orig == (EpochId::MAX - 1) {
+        // if we reached 0 again, it means that during the short time between the first increment and the second, `EpochId::MAX / 2`
+        // increments were concurrently performed. this is expected to be a very large number, so this is so unlikely that we expect
+        // it to never happen.
         panic!(
             "too many concurrent incremenets to the epoch id, failed to increment it beyond the reserved value of 0"
         );
     }
 
     // SAFETY: we know that this will not overflow since the value is less than the max
-    unsafe { orig.unchecked_add(1) }
+    unsafe { orig.unchecked_add(2) }
 }
 
 async fn synchronize_rcu() {
@@ -78,13 +85,16 @@ async fn synchronize_rcu() {
         // check if all threads have seen our new epoch id
         //
         // TODO: what if the epoch id overflows? we may get stuck in an infinite loop.
-        if PER_THREAD_LAST_SEEN_EPOCH_ID
-            .iter()
-            .all(|thread_last_seen_epoch_id| {
-                let value = thread_last_seen_epoch_id.load(atomic::Ordering::Relaxed);
-                value == 0 || value >= new_epoch_id
-            })
-        {
+        if STORAGE_SLOTS.iter().all(|storage_slot| {
+            let value = storage_slot.atomic.load(atomic::Ordering::Relaxed);
+
+            if value == 0 {
+                // if the slot is empty, ignore it
+                return true;
+            }
+
+            value >= new_epoch_id
+        }) {
             // all threads saw our new epoch id, we are done waiting
             break;
         }
@@ -96,12 +106,12 @@ async fn synchronize_rcu() {
 }
 
 fn try_allocate_storage_slot(thread_epoch_id: EpochId) -> Option<StorageSlotId> {
-    for (slot_id, slot) in PER_THREAD_LAST_SEEN_EPOCH_ID.iter_enumerated() {
+    for (slot_id, slot) in STORAGE_SLOTS.iter_enumerated() {
         // TODO: ordering
         // TODO: is the initial load needed? does it improve performance over just immediately trying compare exchange?
-        if slot.load(atomic::Ordering::Relaxed) == 0 {
+        if slot.atomic.load(atomic::Ordering::Relaxed) == 0 {
             // TODO: ordering
-            match slot.compare_exchange(
+            match slot.atomic.compare_exchange(
                 0,
                 thread_epoch_id,
                 atomic::Ordering::Relaxed,
@@ -132,10 +142,10 @@ fn allocate_storage_slot(initial_epoch_id: EpochId) -> StorageSlotId {
 }
 fn free_storage_slot(slot_id: StorageSlotId) {
     // TODO: ordering
-    PER_THREAD_LAST_SEEN_EPOCH_ID[slot_id].store(0, atomic::Ordering::Relaxed);
+    STORAGE_SLOTS[slot_id]
+        .atomic
+        .store(0, atomic::Ordering::Relaxed);
 }
-
-fn is_send<T: Send>() {}
 
 /// a phantom type which is not `Send` and also not `Sync`.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
@@ -224,20 +234,30 @@ fn main() {
             let slot_id = STORAGE_SLOT_ID.get();
             free_storage_slot(slot_id);
         })
-        .on_thread_park(|| {
+        .on_before_task_poll(|_| {
             let slot_id = STORAGE_SLOT_ID.get();
 
             // TODO: ordering
             let cur_epoch_id = CUR_EPOCH_ID.load(atomic::Ordering::Relaxed);
 
             // TODO: ordering
-            let prev_epoch_id = PER_THREAD_LAST_SEEN_EPOCH_ID[slot_id]
-                .swap(cur_epoch_id, atomic::Ordering::Relaxed);
+            let prev_epoch_id = STORAGE_SLOTS[slot_id]
+                .atomic
+                .swap(cur_epoch_id | 1, atomic::Ordering::Relaxed);
 
             if prev_epoch_id != cur_epoch_id {
                 // if the epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.
                 THREAD_EPOCH_UPDATED_NOTIFY.notify_waiters();
             }
+        })
+        .on_after_task_poll(|_| {
+            let slot_id = STORAGE_SLOT_ID.get();
+
+            // unset the "in progress" bit for this thread
+            // TODO: ordering
+            STORAGE_SLOTS[slot_id]
+                .atomic
+                .fetch_xor(1, atomic::Ordering::Relaxed);
         })
         .build()
         .unwrap();
@@ -245,7 +265,7 @@ fn main() {
     rt.block_on(async {
         let orig_string = "Hello, world!";
         let data = Arc::new(Rcu::new(orig_string));
-        let tasks: Vec<_> = (0..100)
+        let tasks: Vec<_> = (0..1)
             .map(|_| {
                 tokio::spawn({
                     let data = data.clone();
