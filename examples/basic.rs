@@ -22,7 +22,8 @@ fn main() {
 
     rt.block_on(async {
         let orig_string = "Hello, world!\n";
-        let data = Arc::new(Rcu::new(orig_string));
+        let final_string = "It works final!\n";
+        let data = Arc::new(Rcu::new(String::from(orig_string)));
         let tasks: Vec<_> = (0..100)
             .map(|_| {
                 tokio::spawn({
@@ -33,7 +34,8 @@ fn main() {
                             {
                                 let value = data.read();
                                 stdout.write_all(value.as_bytes()).unwrap();
-                                if *value != orig_string {
+
+                                if *value == final_string {
                                     break;
                                 }
                             }
@@ -44,7 +46,12 @@ fn main() {
             })
             .collect();
         tokio::time::sleep(Duration::from_secs(1)).await;
-        let old_string = data.swap("It works!\n").await;
+
+        for i in 0..100_000 {
+            let _ = data.swap(format!("It works {}!\n", i)).await;
+        }
+
+        let old_string = data.swap(String::from(final_string)).await;
         tokio::time::sleep(Duration::from_secs(1)).await;
         println!("old string {:?}", old_string);
         for task in tasks {
