@@ -7,7 +7,7 @@ use std::{
 use tokio::sync::Notify;
 
 use crate::{
-    epoch::{epoch_id_get_cur, epoch_id_inc},
+    epoch::{MIN_EPOCH_ID, epoch_id_get_cur, epoch_id_inc},
     per_thread_storage::{
         ThreadStorageSlotId, ThreadStorageSlotValue, thread_storage_slot_alloc,
         thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
@@ -155,8 +155,14 @@ thread_local! {
 
 pub fn on_thread_start() {
     let storage_slot = thread_storage_slot_alloc(ThreadState {
-        // TODO: ordering
-        last_seen_epoch_id: epoch_id_get_cur(atomic::Ordering::Relaxed),
+        // we don't need any real epoch id value here.
+        // the epoch id values are only relevant when a thread is busy.
+        //
+        // also, when a thread starts, it may start using some rcu pointers and suddenly become relevant to
+        // the rcu synchronization, but we don't need to worry about it in this callback, since the thread
+        // will first call the "before poll" callback before it can use any rcu pointer, since rcu pointers can
+        // only be used inside futures.
+        last_seen_epoch_id: MIN_EPOCH_ID,
         is_busy: false,
     });
     THREAD_STORAGE_SLOT.set(Some(storage_slot));
@@ -207,5 +213,24 @@ pub fn on_after_task_poll() {
     let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
     let storage_slot = thread_storage_slot_get(storage_slot_id);
 
+    // theoretically, we could just unset the busy flag and that's it. we don't really have to fetch
+    // a new epoch id here.
+    //
+    // the reason we do is in order to know when we need to actually notify any waiters.
+    //
+    // if we were to only unset the busy flag here, we would have needed to wake the waiters every single time,
+    // since some waiter may be waiting for us to finish using the rcu pointer, and if we will never poll any
+    // future again, we must notify that waiter here in this callback.
+    //
+    // in order to avoid wasteful wakeups though, we only wake the waiters up if we see a new epoch id.
+    //
+    // this saves redundant wakeups in the case where some waiter is waiting for all threads, but our thread
+    // has already seen the waiter's new epoch id and woke the waiter up, but when the waiter woke up he saw
+    // that other threads may still be using the rcu pointer.
+    // in that case, waking the waiter due to updates from our thread is no longer relevant, he is only waiting
+    // for other threads.
+    //
+    // TODO: this introduces more read-side contention on the epoch id, does it really improve performance?
+    // it may slow waiters down by slowing their increment of the epoch id due to the cache-line being contended.
     thread_fetch_new_epoch_id_and_update_waiters(storage_slot, false);
 }

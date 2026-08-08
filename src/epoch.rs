@@ -5,7 +5,10 @@ use crate::atomic_type::Atomic;
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
 pub type EpochId = u32;
 
-static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(2);
+/// the minimum valid epoch id value.
+pub const MIN_EPOCH_ID: EpochId = 2;
+
+static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(MIN_EPOCH_ID);
 
 #[inline]
 pub fn epoch_id_get_cur(ordering: atomic::Ordering) -> EpochId {
