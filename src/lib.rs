@@ -45,8 +45,14 @@ async fn synchronize_rcu() {
         //
         // TODO: what if the epoch id overflows? we may get stuck in an infinite loop.
         if thread_storage_slot_get_all().iter().all(|storage_slot| {
-            // TODO: ordering
-            let encoded_state = storage_slot.state.load(atomic::Ordering::Relaxed);
+            let encoded_state = storage_slot.state.load(
+                // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
+                // pointed at by the rcu protected pointer happen before we see the store to the state.
+                // this is important in order to guarantee that we don't see those writes after we free the protected pointer, which will
+                // lead to a UAF.
+                atomic::Ordering::Acquire,
+            );
+
             let Some(state) = ThreadState::decode(encoded_state) else {
                 // if the slot is empty, ignore it
                 return true;
@@ -208,7 +214,7 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
         // so, for the load, we use relaxed ordering.
         //
         // for the store part, we want to make sure that all writes to the data pointed at by the rcu protected pointer happen before
-        // this store so that no writes happen after the data is freed
+        // this store so that no writes happen after the data is freed.
         atomic::Ordering::Release,
     );
 
