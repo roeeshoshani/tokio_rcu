@@ -198,23 +198,35 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
         atomic::Ordering::Acquire,
     );
 
-    // TODO: since the data is only written by our thread, we can split this `swap` call to instead be a `load` and then a `store`, since
-    // we are guaranteed that no-one will modify the data in between. will that improve performance? an atomic swap may be an expensive
-    // operation, compared to just a load and then a store. need to benchmark this to see if it really does improve performance.
-    let prev_state_encoded = storage_slot.state.swap(
+    // at this point we want to swap the current state with the new state.
+    // we could do that using the atomic `swap` operation, but we can do something more performant while still maintaining correctness.
+    //
+    // the slot's data is loaded from multiple threads, but it is only written to by the current thread who owns that slot.
+    // we can use that fact to split the atomic `swap` operation into a `load` and then a `store`, while still being guaranteed that no
+    // one will modify the value between the `load` and the `store`, since the current thread are the only one allowed to modify the
+    // value.
+    //
+    // as for why this is more efficient, the load-then-store method requires looser memory ordering guarantees, and thus provides more
+    // flexibility for optimization by the hardware's memory subsystem.
+    //
+    // for example, on x86, the load then store will be translated to just 2 simple `MOV` instructions, while a `swap` would have been
+    // translated to a `LOCK XCHG` instruction, which requires much more effort from the hardware.
+    let prev_state_encoded = storage_slot.state.load(
+        // we don't need any special ordering, since this thread is the only entity which can write to this variable.
+        // so, the returned value is sequentially consistent with the execution order of the code in this thread.
+        //
+        // also, we don't need to synchronize this load against any other shared variables, since the returned value is only used to
+        // check whether it was different than the newly written value, and is thus not used in combination with any other shared state.
+        atomic::Ordering::Relaxed,
+    );
+    storage_slot.state.store(
         ThreadState {
             last_seen_epoch_id: new_seen_epoch_id,
             is_busy,
         }
         .encode(),
-        // for the load part, we don't need any special ordering, since this thread is the only entity which can write to this variable,
-        // so the returned value is sequentially consistent with the execution order of the code in this thread.
-        // also, we don't need to synchronize this load against any other shared variables, since the returned value is only used to
-        // check whether it was different than the newly written value, and is thus not used in combination with any other shared state.
-        // so, for the load, we use relaxed ordering.
-        //
-        // for the store part, we want to make sure that all writes to the data pointed at by the rcu protected pointer happen before
-        // this store so that no writes happen after the data is freed.
+        // we use store ordering since we want to make sure that all writes to the data pointed at by the rcu protected pointer happen
+        // before this store so that no writes happen after the data is freed.
         atomic::Ordering::Release,
     );
 
