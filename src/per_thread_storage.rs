@@ -64,8 +64,12 @@ fn thread_storage_slot_try_alloc(
             match slot.state.compare_exchange(
                 ThreadState::NONE_ENCODED_VALUE,
                 encoded_initial_thread_state,
-                // we don't really care about the ordering of these operations, we only want to atomically take ownership of this slot.
-                atomic::Ordering::Relaxed,
+                // in the success case, we use acquire ordering coupled with release ordering when freeing a slot to make sure that
+                // all previous writes to this slot's data by its previous owner happen before the store which released the slot, so
+                // that none of the previous owner's action happen while we own the slot>
+                atomic::Ordering::Acquire,
+                // when this operation fails, we don't care about ordering.
+                // the failing load's result is not used anyway, and the fact that it failed is not used to synchronize anything.
                 atomic::Ordering::Relaxed,
             ) {
                 Ok(_) => {
@@ -97,8 +101,11 @@ pub fn thread_storage_slot_alloc(initial_thread_state: ThreadState) -> ThreadSto
 }
 
 pub fn thread_storage_slot_free(id: ThreadStorageSlotId) {
-    // TODO: ordering
-    THREAD_STORAGE_SLOTS[id]
-        .state
-        .store(ThreadState::NONE_ENCODED_VALUE, atomic::Ordering::Relaxed);
+    THREAD_STORAGE_SLOTS[id].state.store(
+        ThreadState::NONE_ENCODED_VALUE,
+        // we want to make sure that all of our writes to the slot happen before this store, otherwise it will seem as if we are using
+        // this slot after it was freed.
+        // coupled with an acquire load when allocating the slot.
+        atomic::Ordering::Release,
+    );
 }
