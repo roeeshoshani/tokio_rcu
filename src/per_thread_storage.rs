@@ -45,15 +45,26 @@ fn thread_storage_slot_try_alloc(
     encoded_initial_thread_state: EncodedThreadState,
 ) -> Option<ThreadStorageSlotId> {
     for (slot_id, slot) in THREAD_STORAGE_SLOTS.iter_enumerated() {
-        // TODO: ordering
+        // we first perform a load, and only if the load shows that the slot is empty, we try a compare exchange.
+        // we could just perform a compare exchange directly without the extra load, but that would be slower.
         //
-        // TODO: is the initial load needed? does it improve performance over just immediately trying
-        // compare exchange?
+        // if most of the first slots are occupied, and if the slots change infrequently, which is true in our case where the slots
+        // are only modified on thread creation and destruction, then performing a full compare exchange operation on each of those
+        // initial occupied slots is more expansive than a load.
+        //
+        // the load is basically a fast path for occupied slots.
+        //
+        // as for the ordering of this operation, we don't really care about ordering since this is merely an optimization.
+        // assuming that the slots change very infrequently, the value seen here and in the compare exchange will probably be the same,
+        // regardless of ordering.
+        //
+        // in the uncommon case where the ordering of this and the compare exchange will be reversed, nothing bad will happen, we may
+        // just confuse a used slot and think that it is free.
         if slot.state.load(atomic::Ordering::Relaxed) == ThreadState::NONE_ENCODED_VALUE {
-            // TODO: ordering
             match slot.state.compare_exchange(
                 ThreadState::NONE_ENCODED_VALUE,
                 encoded_initial_thread_state,
+                // we don't really care about the ordering of these operations, we only want to atomically take ownership of this slot.
                 atomic::Ordering::Relaxed,
                 atomic::Ordering::Relaxed,
             ) {
