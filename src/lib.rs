@@ -45,6 +45,7 @@ async fn synchronize_rcu() {
         //
         // TODO: what if the epoch id overflows? we may get stuck in an infinite loop.
         if thread_storage_slot_get_all().iter().all(|storage_slot| {
+            // TODO: ordering
             let encoded_state = storage_slot.state.load(atomic::Ordering::Relaxed);
             let Some(state) = ThreadState::decode(encoded_state) else {
                 // if the slot is empty, ignore it
@@ -112,7 +113,6 @@ impl<T> Rcu<T> {
     pub async fn swap(&self, new_value: T) -> T {
         let new_value_ptr = Box::leak(Box::new(new_value));
 
-        // TODO: ordering
         let old_value_ptr = self.value_ptr.swap(
             new_value_ptr,
             // for the store part, we want release ordering since we want to make sure that the write of
@@ -178,21 +178,46 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
     storage_slot: &ThreadStorageSlotValue,
     is_busy: bool,
 ) {
-    let new_seen_epoch_id = epoch_id_get_cur(atomic::Ordering::Relaxed);
+    let new_seen_epoch_id = epoch_id_get_cur(
+        // we use acquire ordering coupled with a release ordering when incrementing the epoch id to make sure that we see swap of the rcu
+        // protected pointer before we see the increment of the epoch id.
+        //
+        // if we were to first see the increment of the epoch id, and only then see the swap of the pointer, we may publish that we have
+        // seen the new epoch id, causing the waiter to free the memory, and then still use the old and now freed pointer since we haven't
+        // yet seen the pointer swap.
+        //
+        // furthermore, this guarantees that the store of the new thread state containing the new seen epoch id happens after the
+        // increment of the epoch id in the eyes of all waiters, although this ordering is not really needed to guarantee the correctness
+        // of the algorithm.
+        atomic::Ordering::Acquire,
+    );
 
+    // TODO: since the data is only written by our thread, we can split this `swap` call to instead be a `load` and then a `store`, since
+    // we are guaranteed that no-one will modify the data in between. will that improve performance? an atomic swap may be an expensive
+    // operation, compared to just a load and then a store. need to benchmark this to see if it really does improve performance.
     let prev_state_encoded = storage_slot.state.swap(
         ThreadState {
-            // TODO: ordering
             last_seen_epoch_id: new_seen_epoch_id,
             is_busy,
         }
         .encode(),
-        // TODO: ordering
-        atomic::Ordering::Relaxed,
+        // for the load part, we don't need any special ordering, since this thread is the only entity which can write to this variable,
+        // so the returned value is sequentially consistent with the execution order of the code in this thread.
+        // also, we don't need to synchronize this load against any other shared variables, since the returned value is only used to
+        // check whether it was different than the newly written value, and is thus not used in combination with any other shared state.
+        // so, for the load, we use relaxed ordering.
+        //
+        // for the store part, we want to make sure that all writes to the data pointed at by the rcu protected pointer happen before
+        // this store so that no writes happen after the data is freed
+        atomic::Ordering::Release,
     );
 
     // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
     let prev_state = ThreadState::decode(prev_state_encoded).unwrap();
+
+    // epoch id should never go down
+    // TODO: what about overflow?
+    debug_assert!(new_seen_epoch_id >= prev_state.last_seen_epoch_id);
 
     if prev_state.last_seen_epoch_id != new_seen_epoch_id {
         // if the last seen epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.

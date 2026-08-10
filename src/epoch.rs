@@ -10,6 +10,7 @@ pub const MIN_EPOCH_ID: EpochId = 2;
 
 static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(MIN_EPOCH_ID);
 
+/// loads the current epoch id with the given ordering. this only performs a single atomic load operation.
 #[inline]
 pub fn epoch_id_get_cur(ordering: atomic::Ordering) -> EpochId {
     CUR_EPOCH_ID.load(ordering)
@@ -18,6 +19,7 @@ pub fn epoch_id_get_cur(ordering: atomic::Ordering) -> EpochId {
 /// increments the epoch id, returning the new epoch id after the increment.
 pub fn epoch_id_inc() -> EpochId {
     // TODO: ordering
+    // TODO: this should probably be `Release`, see `thread_fetch_new_epoch_id_and_update_waiters`.
     let orig = CUR_EPOCH_ID.fetch_add(2, atomic::Ordering::Relaxed);
 
     if orig != (EpochId::MAX - 1) {
