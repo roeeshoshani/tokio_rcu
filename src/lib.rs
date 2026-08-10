@@ -66,6 +66,9 @@ async fn synchronize_rcu() {
 
             // if this thread is currently running some future, check if it has seen our epoch id.
             // if it did, it can't be using any stale rcu pointer.
+            //
+            // TODO: can someone be so behind that he missed a full wraparound of the epoch id, thus passing this constraint while still
+            // holding an old rcu protected pointer? what's preventing anyone from doing that?
             state.last_seen_epoch_id >= new_epoch_id
         }) {
             // all threads saw our new epoch id, we are done waiting
