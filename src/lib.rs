@@ -8,6 +8,7 @@ use tokio::sync::Notify;
 
 use crate::{
     epoch::{MIN_EPOCH_ID, epoch_id_get_cur, epoch_id_inc},
+    fair_gme_lock::FairGmeLock,
     per_thread_storage::{
         ThreadStorageSlotId, ThreadStorageSlotValue, thread_storage_slot_alloc,
         thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
@@ -25,10 +26,23 @@ mod utils;
 
 static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::const_new();
 
+/// group mutual exclusion between waiters and newly starting threads.
+/// group a is waiters, group b is starting threads.
+static WAITERS_VS_THREAD_START_GME: FairGmeLock = FairGmeLock::new();
+
 async fn synchronize_rcu() {
     let new_epoch_id = epoch_id_inc();
 
     loop {
+        // block new threads from starting while we check that we are synchronized with all existing threads.
+        //
+        // if we find that all current threads are updated with the new epoch id, once we release the lock, any new thread which will
+        // grab the lock is guaranteed to also see the new pointer, so it can't access the old one.
+        //
+        // if some of the threads are not yet updated, we release the lock, letting the new threads start, and in the next iteration we
+        // will take those new threads into account.
+        let thread_start_blocker = WAITERS_VS_THREAD_START_GME.lock_group_a();
+
         // start subscribing to the notified waiters event before checking the current state.
         //
         // if we first check the state and only then start listening, there may be a small window after we finish
@@ -75,6 +89,9 @@ async fn synchronize_rcu() {
             // all threads saw our new epoch id, we are done waiting
             break;
         }
+
+        // no longer need to block starting threads
+        drop(thread_start_blocker);
 
         // some of the threads haven't yet seen our new epoch id.
         // so, wait for them to go through a quiescent state and see our new epoch id.
@@ -164,6 +181,10 @@ thread_local! {
 }
 
 pub fn on_thread_start() {
+    // we want mutual exclusion with waiters while we allocate our new slot.
+    // this is important for the waiter logic, not to us.
+    let waiters_blocker = WAITERS_VS_THREAD_START_GME.lock_group_b();
+
     let storage_slot = thread_storage_slot_alloc(ThreadState {
         // we don't need any real epoch id value here.
         // the epoch id values are only relevant when a thread is busy.
@@ -175,6 +196,10 @@ pub fn on_thread_start() {
         last_seen_epoch_id: MIN_EPOCH_ID,
         is_busy: false,
     });
+
+    // finished allocating a slot, the waiters can now see us, so we no longer need to block them.
+    drop(waiters_blocker);
+
     THREAD_STORAGE_SLOT.set(Some(storage_slot));
 }
 
