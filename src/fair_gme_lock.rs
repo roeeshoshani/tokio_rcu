@@ -1,5 +1,7 @@
 use spin::mutex::FairMutex;
 
+// TODO: documentation for almost everything in this module is missing
+
 const NO_OWNER: u8 = 2;
 
 struct State {
