@@ -66,7 +66,7 @@ fn thread_storage_slot_try_alloc(
                 encoded_initial_thread_state,
                 // in the success case, we use acquire ordering coupled with release ordering when freeing a slot to make sure that
                 // all previous writes to this slot's data by its previous owner happen before the store which released the slot, so
-                // that none of the previous owner's action happen while we own the slot>
+                // that none of the previous owner's action happen while we own the slot.
                 atomic::Ordering::Acquire,
                 // when this operation fails, we don't care about ordering.
                 // the failing load's result is not used anyway, and the fact that it failed is not used to synchronize anything.
