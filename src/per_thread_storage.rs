@@ -41,7 +41,7 @@ pub fn thread_storage_slot_get(id: ThreadStorageSlotId) -> &'static ThreadStorag
     &THREAD_STORAGE_SLOTS[id]
 }
 
-fn thread_storage_slot_try_alloc(
+fn thread_storage_slot_alloc_one_try(
     encoded_initial_thread_state: EncodedThreadState,
 ) -> Option<ThreadStorageSlotId> {
     for (slot_id, slot) in THREAD_STORAGE_SLOTS.iter_enumerated() {
@@ -85,19 +85,20 @@ fn thread_storage_slot_try_alloc(
     None
 }
 
-pub fn thread_storage_slot_alloc(initial_thread_state: ThreadState) -> ThreadStorageSlotId {
+pub fn thread_storage_slot_alloc(initial_thread_state: ThreadState) -> Option<ThreadStorageSlotId> {
     const MAX_ATTEMPTS: usize = 16;
 
     let encoded_initial_thread_state = initial_thread_state.encode();
 
     for _ in 0..MAX_ATTEMPTS {
-        if let Some(allocated_slot_id) = thread_storage_slot_try_alloc(encoded_initial_thread_state)
+        if let Some(allocated_slot_id) =
+            thread_storage_slot_alloc_one_try(encoded_initial_thread_state)
         {
-            return allocated_slot_id;
+            return Some(allocated_slot_id);
         }
     }
 
-    panic!("too many concurrent threads, failed to allocate a storage slot for a new thread");
+    None
 }
 
 pub fn thread_storage_slot_free(id: ThreadStorageSlotId) {

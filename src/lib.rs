@@ -182,9 +182,11 @@ thread_local! {
 
 pub fn on_thread_start() {
     // we want mutual exclusion with waiters while we allocate our new slot.
-    // this is important for the waiter logic, not to us.
+    // this is important for the waiter logic, not to our logic here.
     let waiters_blocker = WAITERS_VS_THREAD_START_GME.lock_group_b();
 
+    // note that we must not unwrap here while the gme lock is locked since it does not support poisioning, and panicking while holding
+    // it will make all waiters spin forever.
     let storage_slot = thread_storage_slot_alloc(ThreadState {
         // we don't need any real epoch id value here.
         // the epoch id values are only relevant when a thread is busy.
@@ -199,6 +201,9 @@ pub fn on_thread_start() {
 
     // finished allocating a slot, the waiters can now see us, so we no longer need to block them.
     drop(waiters_blocker);
+
+    let storage_slot = storage_slot
+        .expect("too many concurrent threads, failed to allocate a storage slot for a new thread");
 
     THREAD_STORAGE_SLOT.set(Some(storage_slot));
 }
