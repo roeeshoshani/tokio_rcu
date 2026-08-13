@@ -24,7 +24,7 @@ fn main() {
         let orig_string = "Hello, world!\n";
         let final_string = "It works final!\n";
         let data = Arc::new(Rcu::new(String::from(orig_string)));
-        let tasks: Vec<_> = (0..100)
+        let reader_tasks: Vec<_> = (0..100)
             .map(|_| {
                 tokio::spawn({
                     let data = data.clone();
@@ -35,11 +35,16 @@ fn main() {
                                 let value = data.read();
                                 stdout.write_all(value.as_bytes()).unwrap();
 
+                                // use the value for a while to try to trigger some UAFs.
+                                for _ in 0..10_000 {
+                                    let _ = value.clone();
+                                }
+
                                 if *value == final_string {
                                     break;
                                 }
                             }
-                            tokio::time::sleep(Duration::from_secs(0)).await;
+                            tokio::task::yield_now().await;
                         }
                     }
                 })
@@ -47,15 +52,31 @@ fn main() {
             .collect();
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        for i in 0..100_000 {
-            let _ = data.swap(format!("It works {}!\n", i)).await;
+        let writer_tasks: Vec<_> = (0..20)
+            .map(|worker_id| {
+                tokio::spawn({
+                    let data = data.clone();
+                    async move {
+                        for i in 0..100 {
+                            let new_string = format!("It works {} {}!\n", worker_id, i);
+                            data.swap(new_string).await;
+                            tokio::task::yield_now().await;
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        for task in writer_tasks {
+            task.await.unwrap();
         }
 
         let old_string = data.swap(String::from(final_string)).await;
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        println!("old string {:?}", old_string);
-        for task in tasks {
+
+        for task in reader_tasks {
             task.await.unwrap();
         }
+
+        println!("old string {:?}", old_string);
     })
 }

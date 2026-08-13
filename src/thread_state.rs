@@ -15,7 +15,7 @@ impl ThreadState {
         if encoded == Self::NONE_ENCODED_VALUE {
             None
         } else {
-            let last_seen_epoch_id = encoded & (!1);
+            let last_seen_epoch_id = (encoded & (!1)) as EpochId;
             debug_assert_ne!(last_seen_epoch_id, 0);
 
             Some(Self {
@@ -30,7 +30,8 @@ impl ThreadState {
         debug_assert_ne!(self.last_seen_epoch_id, 0);
         debug_assert_eq!(self.last_seen_epoch_id & 1, 0);
 
-        let result = self.last_seen_epoch_id | EncodedThreadState::from(self.is_busy);
+        let result =
+            self.last_seen_epoch_id as EncodedThreadState | EncodedThreadState::from(self.is_busy);
 
         debug_assert!(result != Self::NONE_ENCODED_VALUE);
 

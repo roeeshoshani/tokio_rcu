@@ -8,7 +8,7 @@ use crate::atomic_type::Atomic;
 ///
 /// the fact that all epoch ids are even allows us to encode information in the least significant bit.
 /// and, the fact that the epoch id is non-zero allows us to encode an empty thread state value as just a 0 value.
-pub type EpochId = u32;
+pub type EpochId = u8;
 
 /// the minimum valid epoch id value.
 pub const EPOCH_ID_MIN: EpochId = 2;

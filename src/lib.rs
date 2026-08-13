@@ -172,11 +172,11 @@ impl<T> Rcu<T> {
             atomic::Ordering::AcqRel,
         );
 
-        // wait for all previous readers to stop using the old value
-        synchronize_rcu().await;
-
         // SAFETY: pointers are always valid by the invariants of this type.
         let boxed_value = unsafe { Box::from_raw(old_value_ptr) };
+
+        // wait for all previous readers to stop using the old value
+        synchronize_rcu().await;
 
         *boxed_value
     }
