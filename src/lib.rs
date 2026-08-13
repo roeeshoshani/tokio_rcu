@@ -7,7 +7,9 @@ use std::{
 use tokio::sync::Notify;
 
 use crate::{
-    epoch::{MIN_EPOCH_ID, epoch_id_get_cur, epoch_id_inc},
+    epoch::{
+        EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId, epoch_id_get_cur, epoch_id_inc, epoch_id_reset_and_inc,
+    },
     fair_gme_lock::FairGmeLock,
     per_thread_storage::{
         ThreadStorageSlotId, ThreadStorageSlotValue, thread_storage_slot_alloc,
@@ -31,8 +33,30 @@ static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::const_new();
 static WAITERS_VS_THREAD_START_GME: FairGmeLock = FairGmeLock::new();
 
 async fn synchronize_rcu() {
-    let new_epoch_id = epoch_id_inc();
+    let new_epoch_id = match epoch_id_inc() {
+        Ok(new_epoch_id) => new_epoch_id,
+        Err(reset_token) => {
+            // epoch id overflow.
+            // wait for all active threads to go through a quiescent state and reset their last seen epoch id.
+            //
+            // any new threads that will start after this finishes will also start with the reset value, at least until they see
+            // our increment below.
+            wait_for_all_active_threads(|last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN)
+                .await;
 
+            // all threads have reset their last seen epoch id.
+            // now reset and increment the epoch id.
+            let new_epoch_id = epoch_id_reset_and_inc(reset_token);
+
+            new_epoch_id
+        }
+    };
+
+    wait_for_all_active_threads(|last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id).await;
+}
+
+/// wait until the last seen epoch id of all threads matches the given predicate.
+async fn wait_for_all_active_threads<F: Fn(EpochId) -> bool>(last_seen_epoch_id_predicate: F) {
     loop {
         // block new threads from starting while we check that we are synchronized with all existing threads.
         //
@@ -79,12 +103,7 @@ async fn synchronize_rcu() {
                 return true;
             }
 
-            // if this thread is currently running some future, check if it has seen our epoch id.
-            // if it did, it can't be using any stale rcu pointer.
-            //
-            // TODO: can someone be so behind that he missed a full wraparound of the epoch id, thus passing this constraint while still
-            // holding an old rcu protected pointer? what's preventing anyone from doing that?
-            state.last_seen_epoch_id >= new_epoch_id
+            last_seen_epoch_id_predicate(state.last_seen_epoch_id)
         }) {
             // all threads saw our new epoch id, we are done waiting
             break;
@@ -195,7 +214,7 @@ pub fn on_thread_start() {
         // the rcu synchronization, but we don't need to worry about it in this callback, since the thread
         // will first call the "before poll" callback before it can use any rcu pointer, since rcu pointers can
         // only be used inside futures.
-        last_seen_epoch_id: MIN_EPOCH_ID,
+        last_seen_epoch_id: EPOCH_ID_MIN,
         is_busy: false,
     });
 
@@ -218,7 +237,7 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
     storage_slot: &ThreadStorageSlotValue,
     is_busy: bool,
 ) {
-    let new_seen_epoch_id = epoch_id_get_cur(
+    let new_seen_epoch_id_raw = epoch_id_get_cur(
         // we use acquire ordering coupled with a release ordering when incrementing the epoch id to make sure that we see swap of the rcu
         // protected pointer before we see the increment of the epoch id.
         //
@@ -231,6 +250,13 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
         // of the algorithm.
         atomic::Ordering::Acquire,
     );
+
+    // in case the epoch id is in the overflow state, reset the seen epoch id value back to 0.
+    let new_seen_epoch_id = if new_seen_epoch_id_raw == EPOCH_ID_MAX {
+        EPOCH_ID_MIN
+    } else {
+        new_seen_epoch_id_raw
+    };
 
     // at this point we want to swap the current state with the new state.
     // we could do that using the atomic `swap` operation, but we can do something more performant while still maintaining correctness.
@@ -266,10 +292,6 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
 
     // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
     let prev_state = ThreadState::decode(prev_state_encoded).unwrap();
-
-    // epoch id should never go down
-    // TODO: what about overflow?
-    debug_assert!(new_seen_epoch_id >= prev_state.last_seen_epoch_id);
 
     if prev_state.last_seen_epoch_id != new_seen_epoch_id {
         // if the last seen epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.
