@@ -32,26 +32,78 @@ static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::const_new();
 /// group a is waiters, group b is starting threads.
 static WAITERS_VS_THREAD_START_GME: FairGmeLock = FairGmeLock::new();
 
-async fn synchronize_rcu() {
-    let new_epoch_id = match epoch_id_inc() {
-        Ok(new_epoch_id) => new_epoch_id,
-        Err(reset_token) => {
-            // epoch id overflow.
-            // wait for all active threads to go through a quiescent state and reset their last seen epoch id.
-            //
-            // any new threads that will start after this finishes will also start with the reset value, at least until they see
-            // our increment below.
-            wait_for_all_active_threads(|last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN)
-                .await;
+static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
-            // all threads have reset their last seen epoch id.
-            // now reset and increment the epoch id.
-            let new_epoch_id = epoch_id_reset_and_inc(reset_token);
+static RESET_FINISHED_NOTIFICATION: Notify = Notify::const_new();
+
+/// increment the epoch id with overflow handling
+async fn epoch_id_inc_with_overflow_handling() -> EpochId {
+    let reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read();
+    match epoch_id_inc() {
+        Ok(new_epoch_id) => {
+            // no overflow
+
+            // reset guard is no longer relevant as there's no overflow.
+            drop(reset_sync_read_guard);
 
             new_epoch_id
         }
-    };
+        Err(err) => {
+            // epoch id overflow.
 
+            // wait for all active threads to reset their last seen epoch id.
+            if err.am_i_the_leader() {
+                // re-lock the reset sync lock for writing.
+                //
+                // once we succeed grabbing the write lock, it is guaranteed that all current waiters have started listening to the reset
+                // finished notification, and all new waiters will be blocked until we finish.
+                drop(reset_sync_read_guard);
+                let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write();
+
+                // wait for all active threads to go through a quiescent state and reset their last seen epoch id.
+                //
+                // any new threads that will start after this finishes will also start with the reset value, at least until they see
+                // our increment below.
+                wait_for_all_active_threads(|last_seen_epoch_id| {
+                    last_seen_epoch_id == EPOCH_ID_MIN
+                })
+                .await;
+
+                // all threads have reset their last seen epoch id.
+                // now reset and increment the epoch id.
+                let new_epoch_id = epoch_id_reset_and_inc();
+
+                // now that we finished resetting the epoch id, we can now let new waiters in.
+                drop(reset_sync_write_guard);
+
+                // wake all current waiters.
+                RESET_FINISHED_NOTIFICATION.notify_waiters();
+
+                new_epoch_id
+            } else {
+                // start listening to reset notification from the leader.
+                //
+                // this must be done before dropping the read lock, so that the leader doesn't start acting before we are listening
+                // to notifications from him.
+                let event = RESET_FINISHED_NOTIFICATION.notified();
+
+                drop(reset_sync_read_guard);
+
+                // wait for the leader to finish waiting for all threads.
+                event.await;
+
+                epoch_id_inc().unwrap_or_else(|_| {
+                    // we should never get another overflow right after we finish resetting.
+                    // the epoch id should take some time to grow before it wraps around again.
+                    panic!("overflow when incrementing epoch id after reset")
+                })
+            }
+        }
+    }
+}
+
+async fn synchronize_rcu() {
+    let new_epoch_id = epoch_id_inc_with_overflow_handling().await;
     wait_for_all_active_threads(|last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id).await;
 }
 

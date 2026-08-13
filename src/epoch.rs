@@ -20,7 +20,19 @@ pub const EPOCH_ID_MAX: EpochId = EpochId::MAX - 1;
 
 static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN);
 
-pub struct EpochIdResetToken;
+/// an error returned when an overflow is detected while trying to increment the epoch id.
+pub struct EpochIdOverflowErr {
+    is_leader: bool,
+}
+impl EpochIdOverflowErr {
+    /// returns whether you are the leader of the overflow of the epoch id, that is, whether you are the exact increment that brought
+    /// the epoch id to its max value.
+    ///
+    /// for every overflow of the epoch id, there is exactly one leader.
+    pub fn am_i_the_leader(&self) -> bool {
+        self.is_leader
+    }
+}
 
 /// loads the current epoch id atomically with the given ordering. this only performs a single atomic load operation.
 #[inline]
@@ -30,8 +42,8 @@ pub fn epoch_id_get_cur(ordering: atomic::Ordering) -> EpochId {
 
 /// increments the epoch id atomically, returning the new epoch id after the increment.
 ///
-/// if the epoch id would overflow due to the increment, this function returns an error containing a reset token which can be
-/// used to reset the epoch id.
+/// if the epoch id would overflow due to the increment, this function returns an error, and the epoch id is guaranteed to be set to its
+/// max value until reset.
 ///
 /// in case this function succeeds, the increment has release ordering, guaranteeing that the swap of the
 /// rcu protected pointer happens before the increment of the epoch id whenever the epoch id is loaded with acquire ordering when the
@@ -39,7 +51,7 @@ pub fn epoch_id_get_cur(ordering: atomic::Ordering) -> EpochId {
 ///
 /// in the failure case, the increment may or many not happen, and if it does, it happens with relaxed ordering.
 #[inline]
-pub fn epoch_id_inc() -> Result<EpochId, EpochIdResetToken> {
+pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
     match CUR_EPOCH_ID.try_update(
         // for the success case, we may want release ordering, but only if the value is still below the overflow threshold.
         //
@@ -63,7 +75,7 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdResetToken> {
                 // all quiescent states will see this value and understand that they need to reset their last seen epoch id.
                 //
                 // all new waiters will fail the increment and will thus also enter the reset state.
-                return Err(EpochIdResetToken);
+                return Err(EpochIdOverflowErr { is_leader: true });
             }
 
             // for the success case, we want release ordering to guarantee that the swapping of the rcu protected pointer happens before
@@ -76,33 +88,21 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdResetToken> {
             // sanity
             debug_assert_eq!(prev_epoch_id, EPOCH_ID_MAX);
 
-            Err(EpochIdResetToken)
+            Err(EpochIdOverflowErr { is_leader: false })
         }
     }
 }
 
-/// resets the epoch id and increments it once, using the given reset token.
+/// resets the epoch id and increments it once.
 ///
-/// if the epoch id has already been reset by another thread, this function just increments it.
-/// in that case, if the increment once again causes an overflow, this function panics.
-///
-/// the increment has release ordering.
+/// this may only be called when the epoch id is in overflow state, and may only be called once per overflow.
 #[inline]
-pub fn epoch_id_reset_and_inc(_token: EpochIdResetToken) -> EpochId {
-    match CUR_EPOCH_ID.compare_exchange(
-        EPOCH_ID_MAX,
+pub fn epoch_id_reset_and_inc() -> EpochId {
+    CUR_EPOCH_ID.store(
         EPOCH_ID_MIN + 2,
         // release ordering is needed for the success case, for the same reason it is needed in the increment logic.
         // see the increment logic for more info.
         atomic::Ordering::Release,
-        atomic::Ordering::Relaxed,
-    ) {
-        Ok(_) => EPOCH_ID_MIN + 2,
-        Err(_) => {
-            // someone had already reset the epoch id, try incrementing it regularly.
-            // this time the increment shouldn't overflow, since we have just reset it.
-            epoch_id_inc()
-                .unwrap_or_else(|_| panic!("overflow when incrementing epoch id after reset"))
-        }
-    }
+    );
+    EPOCH_ID_MIN + 2
 }
