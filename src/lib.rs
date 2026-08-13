@@ -92,7 +92,19 @@ async fn epoch_id_inc_with_overflow_handling() -> EpochId {
                 // wait for the leader to finish waiting for all threads.
                 event.await;
 
-                epoch_id_inc().unwrap_or_else(|_| {
+                // re-lock the reset sync guard just in case, even though we shouldn't expect another reset any time soon.
+                // note that the lock should be unlocked now since the writer unlocks it before waking us up.
+                let reset_sync_read_guard =
+                    EPOCH_ID_RESET_SYNC_LOCK.try_read().unwrap_or_else(|_| {
+                        panic!("another epoch id reset right after the previous reset")
+                    });
+
+                // check the result later, after we unlock the lock, to avoid posioning.
+                let res = epoch_id_inc();
+
+                drop(reset_sync_read_guard);
+
+                res.unwrap_or_else(|_| {
                     // we should never get another overflow right after we finish resetting.
                     // the epoch id should take some time to grow before it wraps around again.
                     panic!("overflow when incrementing epoch id after reset")
