@@ -24,7 +24,7 @@ fn main() {
         let orig_string = "Hello, world!\n";
         let final_string = "It works final!\n";
         let data = Arc::new(Rcu::new(String::from(orig_string)));
-        let reader_tasks: Vec<_> = (0..100)
+        let reader_tasks: Vec<_> = (0..200)
             .map(|_| {
                 tokio::spawn({
                     let data = data.clone();
@@ -52,12 +52,12 @@ fn main() {
             .collect();
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        let writer_tasks: Vec<_> = (0..200)
+        let writer_tasks: Vec<_> = (0..500)
             .map(|worker_id| {
                 tokio::spawn({
                     let data = data.clone();
                     async move {
-                        for i in 0..1000 {
+                        for i in 0..10_000 {
                             let new_string = format!("It works {} {}!\n", worker_id, i);
                             data.swap(new_string).await;
                             tokio::task::yield_now().await;
