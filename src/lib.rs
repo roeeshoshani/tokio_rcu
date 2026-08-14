@@ -14,7 +14,7 @@ use crate::{
         thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
-    utils::PhantomUnsendUnsync,
+    utils::{PhantomUnsendUnsync, PtrMutSendSync},
 };
 
 mod atomic_type;
@@ -234,11 +234,18 @@ impl<T> Rcu<T> {
             atomic::Ordering::AcqRel,
         );
 
-        // SAFETY: pointers are always valid by the invariants of this type.
-        let boxed_value = unsafe { Box::from_raw(old_value_ptr) };
+        // make the pointer `Send` and `Sync` if the `T` is `Send` and `Sync` so that we can hold it across await points without
+        // limiting the future to being non send or non sync.
+        //
+        // SAFETY: the pointer is just a pointer to a heap allocated object, which we will fully own once the synchronize rcu
+        // call finishes.
+        let old_value_ptr = unsafe { PtrMutSendSync::new(old_value_ptr) };
 
         // wait for all previous readers to stop using the old value
         synchronize_rcu().await;
+
+        // SAFETY: pointers are always valid by the invariants of this type.
+        let boxed_value = unsafe { Box::from_raw(old_value_ptr.ptr()) };
 
         *boxed_value
     }
