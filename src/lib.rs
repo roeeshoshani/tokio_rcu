@@ -52,7 +52,7 @@ async fn synchronize_rcu() {
                 // once we succeed grabbing the write lock, it is guaranteed that all current waiters have started listening to the reset
                 // finished notification, and all new waiters will be blocked until we finish.
                 drop(reset_sync_read_guard);
-                let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write();
+                let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write().await;
 
                 // reset the epoch id
                 epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
