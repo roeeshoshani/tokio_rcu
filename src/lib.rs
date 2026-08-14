@@ -20,6 +20,7 @@ use crate::{
 mod atomic_type;
 mod epoch;
 mod fair_gme_lock;
+mod notify;
 mod per_thread_storage;
 mod thread_state;
 mod utils;
