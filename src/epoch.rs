@@ -36,7 +36,7 @@ impl EpochIdOverflowErr {
 
 /// loads the current epoch id atomically with the given ordering. this only performs a single atomic load operation.
 #[inline]
-pub fn epoch_id_get_cur(ordering: atomic::Ordering) -> EpochId {
+pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
     CUR_EPOCH_ID.load(ordering)
 }
 
@@ -93,16 +93,7 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
     }
 }
 
-/// resets the epoch id and increments it once.
-///
-/// this may only be called when the epoch id is in overflow state, and may only be called once per overflow.
-#[inline]
-pub fn epoch_id_reset_and_inc() -> EpochId {
-    CUR_EPOCH_ID.store(
-        EPOCH_ID_MIN + 2,
-        // release ordering is needed for the success case, for the same reason it is needed in the increment logic.
-        // see the increment logic for more info.
-        atomic::Ordering::Release,
-    );
-    EPOCH_ID_MIN + 2
+/// directly sets the epoch id to the given value with the given ordering.
+pub fn epoch_id_set(new_value: EpochId, ordering: atomic::Ordering) {
+    CUR_EPOCH_ID.store(new_value, ordering);
 }
