@@ -52,12 +52,12 @@ fn main() {
             .collect();
         tokio::time::sleep(Duration::from_secs(1)).await;
 
-        let writer_tasks: Vec<_> = (0..20)
+        let writer_tasks: Vec<_> = (0..200)
             .map(|worker_id| {
                 tokio::spawn({
                     let data = data.clone();
                     async move {
-                        for i in 0..100 {
+                        for i in 0..1000 {
                             let new_string = format!("It works {} {}!\n", worker_id, i);
                             data.swap(new_string).await;
                             tokio::task::yield_now().await;
