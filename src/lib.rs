@@ -163,6 +163,12 @@ async fn wait_for_all_active_threads<F: Fn(EpochId) -> bool>(last_seen_epoch_id_
             if !state.is_busy {
                 // if this thread is not currently running any future, so it can't be using any stale rcu
                 // pointer, since such pointers can't be held across await points.
+                //
+                // TODO: what if the thread becomes busy right after we check it, then goes ahead and uses the old
+                // pointer after we free it?
+                // we currently don't deal with this issue and it can cause a UAF.
+                // dealing with it requires either using a lock whenever a thread becomes busy again (e.g whenever it
+                // unparks), or using the membarrier syscall.
                 return true;
             }
 
