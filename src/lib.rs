@@ -39,93 +39,72 @@ static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::const_new();
 
 async fn synchronize_rcu() {
+    // perform a membarrier to make sure that all other threads see the new rcu pointer.
     membarrier::perform();
 
     // after the membarrier, all threads are guaranteed to have seen our new pointer.
     // we only need to wait for any potential existing users of the old pointer to finish using it.
+    //
+    // note that due to the membarrier, we don't need to worry about just-starting threads or just-unparking threads which
+    // may access the old pointer.
+    //
+    // if during the check below, we see that some thread is currently parked, or we don't see the slot of some just-started
+    // thread, then it means that this thread's update of its own state happens strictly after the membarrier, and the state
+    // update always happens before polling the future, so there's no way for the polled future to see the old pointer.
+    // the relationship is:
+    // pointer swap -> membarrier -> thread's update of his own state -> thread's load of the rcu protected pointer
+    // thus, all such threads are guaranteed to see the new pointer, and we can thus ignore them when waiting for all existing
+    // users.
 
-    // if there is a reset currently going on, wait for it to finish.
-    // and, once we grab the lock, no reset can start until we drop it.
-    let mut reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
+    // TODO: deal with overflow
+    let new_epoch_id = epoch_id_inc().unwrap();
 
-    let new_epoch_id = match epoch_id_inc() {
-        Ok(new_epoch_id) => {
-            // no overflow
-            new_epoch_id
-        }
-        Err(err) => {
-            // epoch id overflow.
+    loop {
+        // start subscribing to the notified waiters event before checking the current state.
+        //
+        // if we first check the state and only then start listening, there may be a small window after we finish
+        // checking the values but before we start listening where some thread updates its counter and notifies
+        // all wakers, but we will miss that notification, which is problematic.
+        //
+        // so, we start listening before checking the values, so that even notifications that are issued while
+        // or right after we finished checking are still received.
+        //
+        // TODO: should i implement my own optimized primitive for this instead of tokio's `Notify` for better
+        // peformance?
+        let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
 
-            // perform a reset of the epoch id
-            if err.am_i_the_leader() {
-                // re-lock the reset sync lock for writing.
-                //
-                // once we succeed grabbing the write lock, it is guaranteed that all current waiters have started listening to the reset
-                // finished notification, and all new waiters will be blocked until we finish with the reset process.
-                drop(reset_sync_read_guard);
-                let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write().await;
+        // check if all threads have seen our new epoch id
+        if thread_storage_slot_get_all().iter().all(|storage_slot| {
+            let encoded_state = storage_slot.state.load(
+                // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
+                // pointed at by the rcu protected pointer happen before we see the store to the state.
+                // this is important in order to guarantee that we don't see those writes after we free the protected pointer, which will
+                // lead to a UAF.
+                atomic::Ordering::Acquire,
+            );
 
-                // reset the epoch id
-                epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
-
-                // wait for all active threads to go through a quiescent state and reset their last seen epoch id.
-                //
-                // any new threads that will start after this finishes will also start with the reset value, at least until they see
-                // our increment below.
-                wait_for_all_active_threads(|last_seen_epoch_id| {
-                    last_seen_epoch_id == EPOCH_ID_MIN
-                })
-                .await;
-
-                // at this point, all threads have reset their last seen epoch id.
-
-                // now that we finished resetting the epoch id, we can now let new waiters in.
-                drop(reset_sync_write_guard);
-
-                // wake all current waiters.
-                RESET_FINISHED_NOTIFICATION.notify_waiters();
-            } else {
-                // start listening to reset notification from the leader.
-                //
-                // this must be done before dropping the read lock, so that the leader doesn't start acting before we are listening
-                // to notifications from him.
-                let event = RESET_FINISHED_NOTIFICATION.notified();
-
-                drop(reset_sync_read_guard);
-
-                // wait for the leader to finish waiting for all threads.
-                event.await;
-            }
-
-            // done resetting epoch id
-
-            // re-lock the reset sync guard just in case, even though we shouldn't expect another reset any time soon.
-            // note that the lock should be unlocked now since the writer unlocks it before waking us up.
-            reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.try_read().unwrap_or_else(|_| {
-                panic!("another epoch id reset right after the previous reset")
-            });
-
-            // check the result later, after we unlock the lock, to avoid posioning.
-            let Ok(new_epoch_id) = epoch_id_inc() else {
-                // avoid poisoning the lock
-                drop(reset_sync_read_guard);
-
-                // we should never get another overflow right after we finish resetting.
-                // the epoch id should take some time to grow before it wraps around again.
-                panic!("overflow when incrementing epoch id after reset")
+            let Some(state) = ThreadState::decode(encoded_state) else {
+                // if the slot is empty, ignore it
+                return true;
             };
 
-            new_epoch_id
+            if !state.is_busy {
+                // this thread is currently not busy running any future, so it is not relevant.
+                // as previously explained, even if it start running right after we check this, it is guaranteed to see
+                // the new pointer and is thus not relevant to us.
+                return true;
+            }
+
+            state.last_seen_epoch_id >= new_epoch_id
+        }) {
+            // all threads saw our new epoch id, we are done waiting
+            break;
         }
-    };
 
-    wait_for_all_active_threads(|last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id).await;
-
-    // the reset sync read guard must be held until we finish our entire flow, otherwise someone may reset the epoch id while we
-    // are waiting for threads to see our increment, thus causing us to wait forever.
-    //
-    // this line makes sure we get an error if the guard is dropped earlier.
-    drop(reset_sync_read_guard);
+        // some of the threads haven't yet seen our new epoch id.
+        // so, wait for them to go through a quiescent state and see our new epoch id.
+        notified.await;
+    }
 }
 
 async fn synchronize_rcu_old() {
