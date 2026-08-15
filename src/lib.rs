@@ -39,6 +39,96 @@ static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::const_new();
 
 async fn synchronize_rcu() {
+    membarrier::perform();
+
+    // after the membarrier, all threads are guaranteed to have seen our new pointer.
+    // we only need to wait for any potential existing users of the old pointer to finish using it.
+
+    // if there is a reset currently going on, wait for it to finish.
+    // and, once we grab the lock, no reset can start until we drop it.
+    let mut reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
+
+    let new_epoch_id = match epoch_id_inc() {
+        Ok(new_epoch_id) => {
+            // no overflow
+            new_epoch_id
+        }
+        Err(err) => {
+            // epoch id overflow.
+
+            // perform a reset of the epoch id
+            if err.am_i_the_leader() {
+                // re-lock the reset sync lock for writing.
+                //
+                // once we succeed grabbing the write lock, it is guaranteed that all current waiters have started listening to the reset
+                // finished notification, and all new waiters will be blocked until we finish with the reset process.
+                drop(reset_sync_read_guard);
+                let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write().await;
+
+                // reset the epoch id
+                epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
+
+                // wait for all active threads to go through a quiescent state and reset their last seen epoch id.
+                //
+                // any new threads that will start after this finishes will also start with the reset value, at least until they see
+                // our increment below.
+                wait_for_all_active_threads(|last_seen_epoch_id| {
+                    last_seen_epoch_id == EPOCH_ID_MIN
+                })
+                .await;
+
+                // at this point, all threads have reset their last seen epoch id.
+
+                // now that we finished resetting the epoch id, we can now let new waiters in.
+                drop(reset_sync_write_guard);
+
+                // wake all current waiters.
+                RESET_FINISHED_NOTIFICATION.notify_waiters();
+            } else {
+                // start listening to reset notification from the leader.
+                //
+                // this must be done before dropping the read lock, so that the leader doesn't start acting before we are listening
+                // to notifications from him.
+                let event = RESET_FINISHED_NOTIFICATION.notified();
+
+                drop(reset_sync_read_guard);
+
+                // wait for the leader to finish waiting for all threads.
+                event.await;
+            }
+
+            // done resetting epoch id
+
+            // re-lock the reset sync guard just in case, even though we shouldn't expect another reset any time soon.
+            // note that the lock should be unlocked now since the writer unlocks it before waking us up.
+            reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.try_read().unwrap_or_else(|_| {
+                panic!("another epoch id reset right after the previous reset")
+            });
+
+            // check the result later, after we unlock the lock, to avoid posioning.
+            let Ok(new_epoch_id) = epoch_id_inc() else {
+                // avoid poisoning the lock
+                drop(reset_sync_read_guard);
+
+                // we should never get another overflow right after we finish resetting.
+                // the epoch id should take some time to grow before it wraps around again.
+                panic!("overflow when incrementing epoch id after reset")
+            };
+
+            new_epoch_id
+        }
+    };
+
+    wait_for_all_active_threads(|last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id).await;
+
+    // the reset sync read guard must be held until we finish our entire flow, otherwise someone may reset the epoch id while we
+    // are waiting for threads to see our increment, thus causing us to wait forever.
+    //
+    // this line makes sure we get an error if the guard is dropped earlier.
+    drop(reset_sync_read_guard);
+}
+
+async fn synchronize_rcu_old() {
     let mut reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
 
     let new_epoch_id = match epoch_id_inc() {
@@ -329,6 +419,9 @@ pub trait TokioRuntimeBuilderExt {
 
 impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
     fn enable_rcu(&mut self) -> &mut Self {
+        assert!(membarrier::is_supported());
+        membarrier::register();
+
         self.on_thread_start(|| {
             on_thread_start();
         })
