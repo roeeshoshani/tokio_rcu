@@ -282,6 +282,7 @@ name = "tokio_rcu"
 version = "0.1.0"
 dependencies = [
  "index_type",
+ "libc",
  "spin",
  "tokio",
 ]
