@@ -193,7 +193,7 @@ thread_local! {
     static THREAD_STORAGE_SLOT: Cell<Option<ThreadStorageSlotId>> = Cell::new(None);
 }
 
-pub fn on_thread_start() {
+fn on_thread_start() {
     // we want mutual exclusion with waiters while we allocate our new slot.
     // this is important for the waiter logic, not to our logic here.
     let waiters_blocker = WAITERS_VS_THREAD_START_GME.lock_group_b();
@@ -221,7 +221,7 @@ pub fn on_thread_start() {
     THREAD_STORAGE_SLOT.set(Some(storage_slot));
 }
 
-pub fn on_thread_stop() {
+fn on_thread_stop() {
     let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
     thread_storage_slot_free(storage_slot_id);
     THREAD_STORAGE_SLOT.set(None);
@@ -286,7 +286,7 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
     }
 }
 
-pub fn on_before_task_poll() {
+fn on_before_task_poll() {
     // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
     let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
     let storage_slot = thread_storage_slot_get(storage_slot_id);
@@ -294,7 +294,7 @@ pub fn on_before_task_poll() {
     thread_fetch_new_epoch_id_and_update_waiters(storage_slot, true);
 }
 
-pub fn on_after_task_poll() {
+fn on_after_task_poll() {
     // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
     let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
     let storage_slot = thread_storage_slot_get(storage_slot_id);
@@ -319,4 +319,26 @@ pub fn on_after_task_poll() {
     // TODO: this introduces more read-side contention on the epoch id, does it really improve performance?
     // it may slow waiters down by slowing their increment of the epoch id due to the cache-line being contended.
     thread_fetch_new_epoch_id_and_update_waiters(storage_slot, false);
+}
+
+pub trait TokioRuntimeBuilderExt {
+    /// enable rcu support for this tokio runtime.
+    fn enable_rcu(&mut self) -> &mut Self;
+}
+
+impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
+    fn enable_rcu(&mut self) -> &mut Self {
+        self.on_thread_start(|| {
+            on_thread_start();
+        })
+        .on_thread_stop(|| {
+            on_thread_stop();
+        })
+        .on_before_task_poll(|_| {
+            on_before_task_poll();
+        })
+        .on_after_task_poll(|_| {
+            on_after_task_poll();
+        })
+    }
 }

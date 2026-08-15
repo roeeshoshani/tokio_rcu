@@ -1,22 +1,11 @@
 use std::{io::Write, sync::Arc, time::Duration};
 
-use tokio_rcu::Rcu;
+use tokio_rcu::{Rcu, TokioRuntimeBuilderExt};
 
 fn main() {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
-        .on_thread_start(|| {
-            tokio_rcu::on_thread_start();
-        })
-        .on_thread_stop(|| {
-            tokio_rcu::on_thread_stop();
-        })
-        .on_before_task_poll(|_| {
-            tokio_rcu::on_before_task_poll();
-        })
-        .on_after_task_poll(|_| {
-            tokio_rcu::on_after_task_poll();
-        })
+        .enable_rcu()
         .build()
         .unwrap();
 
