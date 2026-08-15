@@ -362,6 +362,14 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
     }
 }
 
+pub fn on_before_task_poll() {
+    // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
+    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
+    let storage_slot = thread_storage_slot_get(storage_slot_id);
+
+    thread_fetch_new_epoch_id_and_update_waiters(storage_slot, true);
+}
+
 pub fn on_after_task_poll() {
     // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
     let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();

@@ -11,6 +11,9 @@ fn main() {
         .on_thread_stop(|| {
             tokio_rcu::on_thread_stop();
         })
+        .on_before_task_poll(|_| {
+            tokio_rcu::on_before_task_poll();
+        })
         .on_after_task_poll(|_| {
             tokio_rcu::on_after_task_poll();
         })
