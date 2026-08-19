@@ -5,13 +5,13 @@ use std::{
     task::{Poll, Waker},
 };
 
-const SLOT_STATE_EMPTY: u8 = 0;
-const SLOT_STATE_TAKEN: u8 = 1;
-const SLOT_STATE_AWAKENED: u8 = 2;
+const SLOT_STATE_IDLE: u8 = 0;
+const SLOT_STATE_ABANDONED: u8 = 1;
+const SLOT_STATE_NOTIFIED: u8 = 2;
 const SLOT_STATE_DONE: u8 = 3;
-const SLOT_STATE_ABANDONED: u8 = 4;
 
 struct Slot {
+    // TODO: we often call some waker related function pointers while holding the spinlock, which is unwise and should be fixed.
     waker: spin::mutex::Mutex<Option<Waker>>,
     state: AtomicU8,
     next: AtomicPtr<Slot>,
@@ -52,16 +52,28 @@ impl Notify {
                 atomic::Ordering::Relaxed,
             );
 
-            // awake him
+            // notify the slot
             let prev_state = cur_slot.state.swap(
-                SLOT_STATE_AWAKENED,
-                // TODO: ordering
+                SLOT_STATE_NOTIFIED,
+                // no ordering used directly here, we instead use fences as needed depending on the prev state
                 atomic::Ordering::Relaxed,
             );
             if prev_state == SLOT_STATE_ABANDONED {
                 // free this slot up
+
+                // make the load part of the just performed swap operation have acquire ordering so that all uses of this slot by the
+                // waiter happen before his final store to the slot's state, so that the slot is no longer used when we free it here.
+                atomic::fence(atomic::Ordering::Acquire);
+
                 let _ = unsafe { Box::from_raw(cur_slot_ptr) };
             } else {
+                // slot hasn't been abandoned, continue the process of waking it.
+
+                // in this case, we are notifying a live slot, and the notify operation of this data structure should have release
+                // ordering. so, perform this store with release, coupled with the waiters acquire load, so that the waiting logic
+                // provides proper memory ordering guarantees in relation to other data accessed by the threads.
+                atomic::fence(atomic::Ordering::Release);
+
                 // wake him up
                 {
                     let mut waker_storage = cur_slot.waker.lock();
@@ -75,13 +87,28 @@ impl Notify {
                 // it from this point on.
                 let prev_state = cur_slot.state.swap(
                     SLOT_STATE_DONE,
-                    // TODO: ordering
+                    // no ordering used directly here, we instead use fences as needed depending on the prev state
                     atomic::Ordering::Relaxed,
                 );
 
                 if prev_state == SLOT_STATE_ABANDONED {
                     // if one again at this point the slot has already been abandoned, free it
+
+                    // make the load part of the just performed swap operation have acquire ordering so that all uses of this slot by the
+                    // waiter happen before his final store to the slot's state, so that the slot is no longer used when we free it here.
+                    atomic::fence(atomic::Ordering::Acquire);
+
                     let _ = unsafe { Box::from_raw(cur_slot_ptr) };
+                } else {
+                    // we gracefully finished waking this slot up and finished using it.
+                    // it is up to the waiter to free it once he sees that we are done with it.
+
+                    // make the store part of the just performed swap operation have release ordering so that all of our previous uses
+                    // of this slot happen before that final store to the slot's state, so that when the notifier frees it, it is no
+                    // longer in use by us.
+                    //
+                    // also, the notify operation of this data structure should have release ordering.
+                    atomic::fence(atomic::Ordering::Release);
                 }
             }
 
@@ -89,10 +116,10 @@ impl Notify {
         }
     }
 
-    fn alloc_slot(&self) -> &'_ Slot {
+    fn alloc_slot(&self) -> &Slot {
         let new_slot = Box::leak(Box::new(Slot {
             waker: spin::mutex::Mutex::new(None),
-            state: AtomicU8::new(SLOT_STATE_EMPTY),
+            state: AtomicU8::new(SLOT_STATE_IDLE),
             next: AtomicPtr::new(null_mut()),
         }));
 
@@ -125,7 +152,9 @@ impl Notify {
 }
 impl Drop for Notify {
     fn drop(&mut self) {
-        todo!("clean up chunk memory")
+        // at this point we have a mutable reference to the data structure.
+        // all waiters are holding an immutable reference, so at this point we are guaranteed to not have any remaining waiters.
+        // thus, there's no memory that needs to be cleaned up by us or anything like that.
     }
 }
 
@@ -138,15 +167,20 @@ impl<'a> Future for Notified<'a> {
     fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         // fast-path: before doing any waker registration, check if we have already been awakened.
         let cur_state = self.slot.state.load(
-            // TODO: ordering
+            // ordering is only needed if we were notified, so a fence is used.
             atomic::Ordering::Relaxed,
         );
-        if cur_state >= SLOT_STATE_AWAKENED {
+
+        if cur_state >= SLOT_STATE_NOTIFIED {
+            // when we are notified, we want acquire ordering since the data structure's wait operation should provide acquire ordering
+            // to synchronize other data accessed by the threads using this notify instance.
+            atomic::fence(atomic::Ordering::Acquire);
+
             return Poll::Ready(());
         }
 
         // sanity
-        debug_assert_eq!(cur_state, SLOT_STATE_TAKEN);
+        debug_assert_eq!(cur_state, SLOT_STATE_IDLE);
 
         // we have not yet been awakened. register our waker.
         {
@@ -167,16 +201,25 @@ impl<'a> Future for Notified<'a> {
         //
         // this is needed to avoid a race condition where between the time we initially checked the state, and before we registered our
         // waker, someone woke us up. in that case, if we yield now, we will sleep forever.
+        //
+        // in that case, the notifier thread must have grabbed the waker lock before we grabbed it (otherwise he would have seen our
+        // waker), and the notifier performs the store to the state before grabbing the lock. the acquire ordering used by us when
+        // acquiring the lock, and the release ordering used by the notifier when he released the lock, guaranteed that in such a scenario
+        // we are now guaranteed to see the notifier's store to the state, regardless of the ordering of the below store.
         let cur_state = self.slot.state.load(
-            // TODO: ordering
+            // ordering is only needed if we were notified, so a fence is used.
             atomic::Ordering::Relaxed,
         );
-        if cur_state >= SLOT_STATE_AWAKENED {
+
+        if cur_state >= SLOT_STATE_NOTIFIED {
+            // when we are notified, we want acquire ordering since the data structure's wait operation should provide acquire ordering.
+            atomic::fence(atomic::Ordering::Acquire);
+
             return Poll::Ready(());
         }
 
         // sanity
-        debug_assert_eq!(cur_state, SLOT_STATE_TAKEN);
+        debug_assert_eq!(cur_state, SLOT_STATE_IDLE);
 
         Poll::Pending
     }
@@ -186,17 +229,26 @@ impl<'a> Drop for Notified<'a> {
     fn drop(&mut self) {
         let prev_value = self.slot.state.swap(
             SLOT_STATE_ABANDONED,
-            // TODO: ordering
+            // the memory ordering depends on the previous value, and fences are used to apply those memory orderings where appropriate.
             atomic::Ordering::Relaxed,
         );
 
         if prev_value == SLOT_STATE_DONE {
             // we can free this slot
+
+            // make the load part of the just performed swap operation have acquire ordering so that all uses of this slot by the
+            // notifier happen before his final store to the slot's state, so that the slot is no longer used when we free it here.
+            atomic::fence(atomic::Ordering::Acquire);
+
             let slot_ptr = self.slot as *const Slot as *mut Slot;
             let _ = unsafe { Box::from_raw(slot_ptr) };
         } else {
             // we can't free this slot yet, it may be in use.
             // the waker will free it for us when he sees the abandoned state.
+
+            // make the store part of the just performed swap operation have release ordering so that all of our previous uses of this
+            // slot happen before that final store to the slot's state, so that when the notifier frees it, it is no longer in use by us.
+            atomic::fence(atomic::Ordering::Release);
         }
     }
 }
