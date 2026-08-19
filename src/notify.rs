@@ -74,12 +74,14 @@ impl Notify {
                 // provides proper memory ordering guarantees in relation to other data accessed by the threads.
                 atomic::fence(atomic::Ordering::Release);
 
-                // wake him up
-                {
+                // wake him up.
+                // while doing so, we must make sure that we don't call the wake method while holding the lock.
+                let maybe_waker = {
                     let mut waker_storage = cur_slot.waker.lock();
-                    if let Some(waker) = waker_storage.take() {
-                        waker.wake();
-                    }
+                    waker_storage.take()
+                };
+                if let Some(waker) = maybe_waker {
+                    waker.wake();
                 }
 
                 // let him know that we're done using the slot and it can be freed.
