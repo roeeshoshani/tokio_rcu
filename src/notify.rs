@@ -11,7 +11,6 @@ const SLOT_STATE_NOTIFIED: u8 = 2;
 const SLOT_STATE_DONE: u8 = 3;
 
 struct Slot {
-    // TODO: we often call some waker related function pointers while holding the spinlock, which is unwise and should be fixed.
     waker: spin::mutex::Mutex<Option<Waker>>,
     state: AtomicU8,
     next: AtomicPtr<Slot>,
@@ -75,7 +74,8 @@ impl Notify {
                 atomic::fence(atomic::Ordering::Release);
 
                 // wake him up.
-                // while doing so, we must make sure that we don't call the wake method while holding the lock.
+                // while doing so, we must make sure that we don't call the wake method while holding the lock, since the wake function
+                // may run some non-trivial code while holding the spinlock (e.g. it may sleep, or panic).
                 let maybe_waker = {
                     let mut waker_storage = cur_slot.waker.lock();
                     waker_storage.take()
@@ -185,16 +185,23 @@ impl<'a> Future for Notified<'a> {
         debug_assert_eq!(cur_state, SLOT_STATE_IDLE);
 
         // we have not yet been awakened. register our waker.
+        let new_waker = cx.waker();
         {
             let mut waker_storage = self.slot.waker.lock();
-            let new_waker = cx.waker();
             match &*waker_storage {
+                // note that will_wake can be used while holding the spinlock as it only compares value and doesn't do any non-trivial
+                // stuff (e.g. sleeping, panicking).
                 Some(old_waker) if old_waker.will_wake(new_waker) => {
                     // can re-use the old waker
                 }
                 _ => {
-                    // use the new waker
-                    *waker_storage = Some(new_waker.clone());
+                    // can't re-use the old waker, use the new waker.
+                    // while doing so, we need to make sure that we don't perform the clone of the waker while holding the lock since
+                    // the clone function may run some non-trivial code while holding the spinlock (e.g. it may sleep, or panic).
+                    drop(waker_storage);
+                    let new_waker_clone = new_waker.clone();
+                    waker_storage = self.slot.waker.lock();
+                    *waker_storage = Some(new_waker_clone);
                 }
             }
         }
