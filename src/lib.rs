@@ -17,7 +17,6 @@ use crate::{
 mod atomic_type;
 mod epoch;
 mod membarrier;
-mod notify;
 mod per_thread_storage;
 mod rcu;
 mod thread_state;
