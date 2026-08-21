@@ -55,7 +55,19 @@ impl Notify {
         }
     }
 
-    fn alloc_slot_from_freelist(&self) {
+    fn alloc_slot_from_freelist(&self) -> Option<()> {
+        // fast path - if the freelist is empty avoid doing any work at all.
+        if self
+            .slots_freelist_head
+            .load(
+                // TODO: ordering
+                atomic::Ordering::Relaxed,
+            )
+            .is_null()
+        {
+            return None;
+        }
+
         // we need a lock to synchronize with other threads that are trying to allocate.
         // if multiple people can allocate simultanously, the ABA problem can occur.
         // to solve the ABA problem, we only need to block one side of the re-allocation - the free, or the allocation itself, since the
@@ -81,8 +93,11 @@ impl Notify {
                 ))
             },
         ) {
-            Ok(_) => todo!(),
-            Err(_) => {}
+            Ok(_) => {}
+            Err(_) => {
+                // freelist is empty
+                None
+            }
         }
     }
 
