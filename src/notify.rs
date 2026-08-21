@@ -1,9 +1,13 @@
 use std::{
     pin::Pin,
     ptr::null_mut,
-    sync::atomic::{self, AtomicPtr, AtomicU8},
+    sync::atomic::{self, AtomicPtr, AtomicU8, AtomicUsize},
     task::{Poll, Waker},
 };
+
+// TODO: i have a bug throughout the entire code. a release fence must be issued before the write, not after it.
+
+// TODO: take release-sequences into account (see c++ memory model for more info).
 
 const SLOT_STATE_IDLE: u8 = 0;
 const SLOT_STATE_ABANDONED: u8 = 1;
@@ -16,15 +20,120 @@ struct Slot {
     next: AtomicPtr<Slot>,
 }
 
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub struct NotifyConfig {
+    pub max_freelist_size: usize,
+}
+impl NotifyConfig {
+    pub const fn default() -> Self {
+        Self {
+            max_freelist_size: 16,
+        }
+    }
+}
+impl Default for NotifyConfig {
+    fn default() -> Self {
+        Self::default()
+    }
+}
+
 pub struct Notify {
     slots_list_head: AtomicPtr<Slot>,
-    // TODO: maybe save a freelist of old slot allocations for re-use? to avoid allocating on every call. can improve performance.
-    // but, need to cap its size.
+    slots_freelist_head: AtomicPtr<Slot>,
+    slots_freelist_len: AtomicUsize,
+    slot_alloc_lock: spin::mutex::Mutex<()>,
+    config: NotifyConfig,
 }
 impl Notify {
-    pub const fn new() -> Self {
+    pub const fn new(config: NotifyConfig) -> Self {
         Self {
             slots_list_head: AtomicPtr::new(null_mut()),
+            slots_freelist_head: AtomicPtr::new(null_mut()),
+            slots_freelist_len: AtomicUsize::new(0),
+            slot_alloc_lock: spin::mutex::Mutex::new(()),
+            config,
+        }
+    }
+
+    fn alloc_slot_from_freelist(&self) {
+        // we need a lock to synchronize with other threads that are trying to allocate.
+        // if multiple people can allocate simultanously, the ABA problem can occur.
+        // to solve the ABA problem, we only need to block one side of the re-allocation - the free, or the allocation itself, since the
+        // ABA problem relies on the slot being allocated and then freed but with a different `next` pointer. if we prevent allocations
+        // or deallocations while operating, the problem is solved.
+        // here we choose to prevent allocations.
+        let _guard = self.slot_alloc_lock.lock();
+
+        match self.slots_freelist_head.try_update(
+            // for the store part, we don't need any ordering. we don't break the current release-sequence since this is an atomic
+            // RMW operation.
+            atomic::Ordering::Relaxed,
+            // TODO: ordering
+            atomic::Ordering::Relaxed,
+            |cur_head| {
+                if cur_head.is_null() {
+                    return None;
+                }
+                let head_slot = unsafe { &*cur_head };
+                Some(head_slot.next.load(
+                    // TODO: ordering
+                    atomic::Ordering::Relaxed,
+                ))
+            },
+        ) {
+            Ok(_) => todo!(),
+            Err(_) => {}
+        }
+    }
+
+    unsafe fn add_slot_to_freelist(&self, slot_ptr: *mut Slot) {
+        let slot = unsafe { &mut *slot_ptr };
+        self.slots_freelist_head.update(
+            // for the successful store, we want release ordering to ensure that all of our previous operations involving that slot happen
+            // before the store which adds it to the list.
+            //
+            // this also ensures that the increment of the len happens before the store of the pointer.
+            atomic::Ordering::Release,
+            // for the load part, we only need ordering on the final successful cmpxchg, so we use a fence.
+            atomic::Ordering::Relaxed,
+            |cur_list_head| {
+                slot.next = AtomicPtr::new(cur_list_head);
+                slot
+            },
+        );
+
+        // for the load part, use acquire ordering to make sure that at this point we see all writes performed to the last slot.
+        // this is not important for us, but it does important to whoever than loads our pointer and re-uses the slot.
+        // we want to make sure that he doesn't only see our previous writes, but all writes of all other pointers following
+        // us in the list.
+        // this acquire ordering paired with the release ordering of the store essentially crates a chain of ordering between all
+        // slots in the list, guaranteeing that if anyone sees our pointer published, he sees our writes to the slot and the
+        // writes performed to all slots after us in the list.
+        atomic::fence(atomic::Ordering::Acquire);
+    }
+
+    // adds the given slot to the freelist if the freelist is not already full.
+    unsafe fn add_slot_to_freelist_if_needed(&self, slot_ptr: *mut Slot) {
+        match self.slots_freelist_len.try_update(
+            // no ordering is needed here, we only need this to be atomic.
+            atomic::Ordering::Relaxed,
+            atomic::Ordering::Relaxed,
+            |cur_len| {
+                if cur_len < self.config.max_freelist_size {
+                    Some(cur_len + 1)
+                } else {
+                    None
+                }
+            },
+        ) {
+            Ok(_) => {
+                // have enough space for this slot, add it to the freelist
+                unsafe { self.add_slot_to_freelist(slot_ptr) };
+            }
+            Err(_) => {
+                // already have enough free slots, drop this slot
+                let _ = unsafe { Box::from_raw(slot_ptr) };
+            }
         }
     }
 
@@ -129,19 +238,22 @@ impl Notify {
             // for the store part, use release ordering so that our initialization of the slot is visible once others see the pointer
             // published
             atomic::Ordering::Release,
-            // for the load part, use acquire ordering to make sure that at this point we see all initialization performed to the
-            // last slot. this is not important for us, but it does important to whoever than loads our pointer and goes over the list.
-            // we want to make sure that he doesn't only see our initialization, but all initialization of all other pointers following
-            // us in the list.
-            // this acquire ordering paired with the release ordering of the store essentially crates a chain of ordering between all
-            // slots in the list, guaranteeing that if anyone sees our pointer published, he sees our initialization of the slot and the
-            // initialization of all slots after us in the list.
-            atomic::Ordering::Acquire,
+            // for the load part, we only need ordering on the final successful cmpxchg, so we use a fence.
+            atomic::Ordering::Relaxed,
             |cur_list_head| {
                 new_slot.next = AtomicPtr::new(cur_list_head);
                 new_slot
             },
         );
+
+        // for the load part, use acquire ordering to make sure that at this point we see all initialization performed to the
+        // last slot. this is not important for us, but it does important to whoever than loads our pointer and goes over the list.
+        // we want to make sure that he doesn't only see our initialization, but all initialization of all other pointers following
+        // us in the list.
+        // this acquire ordering paired with the release ordering of the store essentially crates a chain of ordering between all
+        // slots in the list, guaranteeing that if anyone sees our pointer published, he sees our initialization of the slot and the
+        // initialization of all slots after us in the list.
+        atomic::fence(atomic::Ordering::Acquire);
 
         new_slot
     }
