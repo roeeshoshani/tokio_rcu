@@ -1,14 +1,12 @@
 use std::{
     cell::Cell,
-    ops::Deref,
-    sync::atomic::{self, AtomicPtr},
+    sync::atomic::{self},
 };
 
 use tokio::sync::Notify;
 
 use crate::{
     epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
-    fair_gme_lock::FairGmeLock,
     per_thread_storage::{
         ThreadStorageSlotId, ThreadStorageSlotValue, thread_storage_slot_alloc,
         thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
@@ -18,8 +16,7 @@ use crate::{
 
 mod atomic_type;
 mod epoch;
-mod fair_gme_lock;
-mod notify;
+mod membarrier;
 mod per_thread_storage;
 mod rcu;
 mod thread_state;
@@ -27,24 +24,38 @@ mod utils;
 
 pub use rcu::{Rcu, RcuReadGuard};
 
+/// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful
+/// way (e.g. become busy). used by waiters to wait for notifications in a blocking manner while waiting for threads to see
+/// their new epoch id.
 static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::const_new();
-
-/// group mutual exclusion between waiters and newly starting threads.
-/// group a is waiters, group b is starting threads.
-static WAITERS_VS_THREAD_START_GME: FairGmeLock = FairGmeLock::new();
 
 static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::const_new();
 
+/// wait for an RCU grace period.
 async fn synchronize_rcu() {
+    // perform a membarrier to make sure that all other threads see the new rcu pointer.
+    membarrier::perform();
+
+    // after the membarrier, all threads are guaranteed to have seen our new pointer.
+    // we only need to wait for any potential existing users of the old pointer to finish using it.
+    //
+    // note that due to the membarrier, we don't need to worry about just-starting threads or just-unparking threads which
+    // may access the old pointer.
+    //
+    // if during the check below, we see that some thread is currently parked, or we don't see the slot of some just-started
+    // thread, then it means that this thread's update of its own state happens strictly after the membarrier, and the state
+    // update always happens before polling the future, so there's no way for the polled future to see the old pointer.
+    // the relationship is:
+    // pointer swap -> membarrier -> thread's update of his own state -> thread's load of the rcu protected pointer
+    // thus, all such threads are guaranteed to see the new pointer, and we can thus ignore them when waiting for all existing
+    // users.
+
     let mut reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
 
     let new_epoch_id = match epoch_id_inc() {
-        Ok(new_epoch_id) => {
-            // no overflow
-            new_epoch_id
-        }
+        Ok(v) => v,
         Err(err) => {
             // epoch id overflow.
 
@@ -60,21 +71,25 @@ async fn synchronize_rcu() {
                 // reset the epoch id
                 epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
 
-                // wait for all active threads to go through a quiescent state and reset their last seen epoch id.
+                // make sure that all threads see the reset of the epoch id.
+                membarrier::perform();
+
+                // wait for all threads to update their last seen epoch id to the reset value.
                 //
-                // any new threads that will start after this finishes will also start with the reset value, at least until they see
-                // our increment below.
-                wait_for_all_active_threads(|last_seen_epoch_id| {
+                // note that parked and not yet started threads are not relevant here, since once they wake up they
+                // will see the updated reset value of the epoch id due to the membarrier.
+                wait_for_running_threads_to_see_epoch_id(|last_seen_epoch_id| {
                     last_seen_epoch_id == EPOCH_ID_MIN
                 })
                 .await;
 
-                // at this point, all threads have reset their last seen epoch id.
+                // at this point, all running threads have reset their last seen epoch id, and new threads are guaranteed
+                // to see at least the reset value.
 
                 // now that we finished resetting the epoch id, we can now let new waiters in.
                 drop(reset_sync_write_guard);
 
-                // wake all current waiters.
+                // wake all non-leader waiters that are in reset mode waiting for us to finish.
                 RESET_FINISHED_NOTIFICATION.notify_waiters();
             } else {
                 // start listening to reset notification from the leader.
@@ -83,9 +98,10 @@ async fn synchronize_rcu() {
                 // to notifications from him.
                 let event = RESET_FINISHED_NOTIFICATION.notified();
 
+                // let the leader start doing its thing.
                 drop(reset_sync_read_guard);
 
-                // wait for the leader to finish waiting for all threads.
+                // wait for the leader to finish the reset operation and notify us.
                 event.await;
             }
 
@@ -97,7 +113,6 @@ async fn synchronize_rcu() {
                 panic!("another epoch id reset right after the previous reset")
             });
 
-            // check the result later, after we unlock the lock, to avoid posioning.
             let Ok(new_epoch_id) = epoch_id_inc() else {
                 // avoid poisoning the lock
                 drop(reset_sync_read_guard);
@@ -111,27 +126,22 @@ async fn synchronize_rcu() {
         }
     };
 
-    wait_for_all_active_threads(|last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id).await;
-
-    // the reset sync read guard must be held until we finish our entire flow, otherwise someone may reset the epoch id while we
-    // are waiting for threads to see our increment, thus causing us to wait forever.
-    //
-    // this line makes sure we get an error if the guard is dropped earlier.
-    drop(reset_sync_read_guard);
+    // note that parked and not-yet-started threads are irrelevant here since they are guaranteed to see the new pointer
+    // due to the membarrier.
+    wait_for_running_threads_to_see_epoch_id(|last_seen_epoch_id| {
+        last_seen_epoch_id >= new_epoch_id
+    })
+    .await;
 }
 
-/// wait until the last seen epoch id of all threads matches the given predicate.
-async fn wait_for_all_active_threads<F: Fn(EpochId) -> bool>(last_seen_epoch_id_predicate: F) {
+/// wait for all threads to see some epoch id as implemented in the given predicate which processes the last seen epoch
+/// id of each thread.
+///
+/// this function does not take into account new threads just starting, nor new threads just existing the busy state.
+async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
+    last_seen_epoch_id_predicate: F,
+) {
     loop {
-        // block new threads from starting while we check that we are synchronized with all existing threads.
-        //
-        // if we find that all current threads are updated with the new epoch id, once we release the lock, any new thread which will
-        // grab the lock is guaranteed to also see the new pointer, so it can't access the old one.
-        //
-        // if some of the threads are not yet updated, we release the lock, letting the new threads start, and in the next iteration we
-        // will take those new threads into account.
-        let thread_start_blocker = WAITERS_VS_THREAD_START_GME.lock_group_a();
-
         // start subscribing to the notified waiters event before checking the current state.
         //
         // if we first check the state and only then start listening, there may be a small window after we finish
@@ -146,8 +156,6 @@ async fn wait_for_all_active_threads<F: Fn(EpochId) -> bool>(last_seen_epoch_id_
         let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
 
         // check if all threads have seen our new epoch id
-        //
-        // TODO: what if the epoch id overflows? we may get stuck in an infinite loop.
         if thread_storage_slot_get_all().iter().all(|storage_slot| {
             let encoded_state = storage_slot.state.load(
                 // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
@@ -163,14 +171,9 @@ async fn wait_for_all_active_threads<F: Fn(EpochId) -> bool>(last_seen_epoch_id_
             };
 
             if !state.is_busy {
-                // if this thread is not currently running any future, so it can't be using any stale rcu
-                // pointer, since such pointers can't be held across await points.
-                //
-                // TODO: what if the thread becomes busy right after we check it, then goes ahead and uses the old
-                // pointer after we free it?
-                // we currently don't deal with this issue and it can cause a UAF.
-                // dealing with it requires either using a lock whenever a thread becomes busy again (e.g whenever it
-                // unparks), or using the membarrier syscall.
+                // this thread is currently not busy running any future, so it is not relevant.
+                // as previously explained, even if it start running right after we check this, it is guaranteed to see
+                // the new pointer and is thus not relevant to us.
                 return true;
             }
 
@@ -179,9 +182,6 @@ async fn wait_for_all_active_threads<F: Fn(EpochId) -> bool>(last_seen_epoch_id_
             // all threads saw our new epoch id, we are done waiting
             break;
         }
-
-        // no longer need to block starting threads
-        drop(thread_start_blocker);
 
         // some of the threads haven't yet seen our new epoch id.
         // so, wait for them to go through a quiescent state and see our new epoch id.
@@ -193,30 +193,36 @@ thread_local! {
     static THREAD_STORAGE_SLOT: Cell<Option<ThreadStorageSlotId>> = Cell::new(None);
 }
 
-fn on_thread_start() {
-    // we want mutual exclusion with waiters while we allocate our new slot.
-    // this is important for the waiter logic, not to our logic here.
-    let waiters_blocker = WAITERS_VS_THREAD_START_GME.lock_group_b();
+/// returns the storage slot of the current thread, assuming that a storage slot was already allocated for the current
+/// thread.
+fn this_thread_get_storage_slot() -> &'static ThreadStorageSlotValue {
+    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
+    thread_storage_slot_get(storage_slot_id)
+}
 
-    // note that we must not unwrap here while the gme lock is locked since it does not support poisioning, and panicking while holding
-    // it will make all waiters spin forever.
-    let storage_slot = thread_storage_slot_alloc(ThreadState {
-        // we don't need any real epoch id value here.
-        // the epoch id values are only relevant when a thread is busy.
+/// "see" a new epoch id in the current thread.
+/// this fetches the current epoch id with a proper memory ordering - a release memory ordering, which provides the required
+/// guaranteed, for example it guarantees that once we see an updated epoch id, we see the swap of the rcu protected pointer
+/// as happened before that store to the epoch id.
+fn this_thread_see_new_epoch_id() -> EpochId {
+    epoch_id_get(
+        // we use acquire ordering coupled with a release ordering when incrementing the epoch id to make sure that we see swap of the rcu
+        // protected pointer before we see the increment of the epoch id.
         //
-        // also, when a thread starts, it may start using some rcu pointers and suddenly become relevant to
-        // the rcu synchronization, but we don't need to worry about it in this callback, since the thread
-        // will first call the "before poll" callback before it can use any rcu pointer, since rcu pointers can
-        // only be used inside futures.
-        last_seen_epoch_id: EPOCH_ID_MIN,
-        is_busy: false,
-    });
+        // if we were to first see the increment of the epoch id, and only then see the swap of the pointer, we may publish that we have
+        // seen the new epoch id, causing the waiter to free the memory, and then still use the old and now freed pointer since we haven't
+        // yet seen the pointer swap.
+        atomic::Ordering::Acquire,
+    )
+}
 
-    // finished allocating a slot, the waiters can now see us, so we no longer need to block them.
-    drop(waiters_blocker);
-
-    let storage_slot = storage_slot
-        .expect("too many concurrent threads, failed to allocate a storage slot for a new thread");
+fn on_thread_start() {
+    let epoch_id = this_thread_see_new_epoch_id();
+    let storage_slot = thread_storage_slot_alloc(ThreadState {
+        last_seen_epoch_id: epoch_id,
+        is_busy: true,
+    })
+    .expect("too many concurrent threads, failed to allocate a storage slot for a new thread");
 
     THREAD_STORAGE_SLOT.set(Some(storage_slot));
 }
@@ -227,23 +233,41 @@ fn on_thread_stop() {
     THREAD_STORAGE_SLOT.set(None);
 }
 
-fn thread_fetch_new_epoch_id_and_update_waiters(
-    storage_slot: &ThreadStorageSlotValue,
-    is_busy: bool,
-) {
-    let new_seen_epoch_id = epoch_id_get(
-        // we use acquire ordering coupled with a release ordering when incrementing the epoch id to make sure that we see swap of the rcu
-        // protected pointer before we see the increment of the epoch id.
-        //
-        // if we were to first see the increment of the epoch id, and only then see the swap of the pointer, we may publish that we have
-        // seen the new epoch id, causing the waiter to free the memory, and then still use the old and now freed pointer since we haven't
-        // yet seen the pointer swap.
-        //
-        // furthermore, this guarantees that the store of the new thread state containing the new seen epoch id happens after the
-        // increment of the epoch id in the eyes of all waiters, although this ordering is not really needed to guarantee the correctness
-        // of the algorithm.
-        atomic::Ordering::Acquire,
+fn on_thread_park() {
+    let storage_slot = this_thread_get_storage_slot();
+
+    // mark this thread as non-busy.
+    storage_slot.state.fetch_and(
+        !1,
+        // no special ordering needed here.
+        // note that this relaxed store doesn't break the release-sequence of this variable (see c++ memory model for more
+        // info), so it doesn't prevent the loader from synchronizing with any previous release ordered store.
+        atomic::Ordering::Relaxed,
     );
+
+    // wake all waiters since some waiters may be waiting for us to see their new epoch id, and we are instead going to sleep
+    // so we will never see it.
+    // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected
+    // pointers.
+    THREAD_EPOCH_UPDATED_NOTIFY.notify_waiters();
+}
+
+fn on_thread_unpark() {
+    let storage_slot = this_thread_get_storage_slot();
+
+    // mark this thread as busy.
+    storage_slot.state.fetch_or(
+        1,
+        // no special ordering needed here.
+        // note that this relaxed store doesn't break the release-sequence of this variable (see c++ memory model for more
+        // info), so it doesn't prevent the loader from synchronizing with any previous release ordered store.
+        atomic::Ordering::Relaxed,
+    );
+}
+
+fn on_after_task_poll() {
+    let storage_slot = this_thread_get_storage_slot();
+    let new_seen_epoch_id = this_thread_see_new_epoch_id();
 
     // at this point we want to swap the current state with the new state.
     // we could do that using the atomic `swap` operation, but we can do something more performant while still maintaining correctness.
@@ -269,56 +293,23 @@ fn thread_fetch_new_epoch_id_and_update_waiters(
     storage_slot.state.store(
         ThreadState {
             last_seen_epoch_id: new_seen_epoch_id,
-            is_busy,
+            is_busy: true,
         }
         .encode(),
-        // we use store ordering since we want to make sure that all writes to the data pointed at by the rcu protected pointer happen
+        // we use release ordering since we want to make sure that all writes to the data pointed at by the rcu protected pointer happen
         // before this store so that no writes happen after the data is freed.
         atomic::Ordering::Release,
     );
 
-    // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
     let prev_state = ThreadState::decode(prev_state_encoded).unwrap();
+
+    // we are expected to be in the busy state while not parked
+    debug_assert!(prev_state.is_busy);
 
     if prev_state.last_seen_epoch_id != new_seen_epoch_id {
         // if the last seen epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.
         THREAD_EPOCH_UPDATED_NOTIFY.notify_waiters();
     }
-}
-
-fn on_before_task_poll() {
-    // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
-    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
-    let storage_slot = thread_storage_slot_get(storage_slot_id);
-
-    thread_fetch_new_epoch_id_and_update_waiters(storage_slot, true);
-}
-
-fn on_after_task_poll() {
-    // TODO: can we use `unwrap_unchecked` here for better performance? how do we mark the unsafety?
-    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
-    let storage_slot = thread_storage_slot_get(storage_slot_id);
-
-    // theoretically, we could just unset the busy flag and that's it. we don't really have to fetch
-    // a new epoch id here.
-    //
-    // the reason we do is in order to know when we need to actually notify any waiters.
-    //
-    // if we were to only unset the busy flag here, we would have needed to wake the waiters every single time,
-    // since some waiter may be waiting for us to finish using the rcu pointer, and if we will never poll any
-    // future again, we must notify that waiter here in this callback.
-    //
-    // in order to avoid wasteful wakeups though, we only wake the waiters up if we see a new epoch id.
-    //
-    // this saves redundant wakeups in the case where some waiter is waiting for all threads, but our thread
-    // has already seen the waiter's new epoch id and woke the waiter up, but when the waiter woke up he saw
-    // that other threads may still be using the rcu pointer.
-    // in that case, waking the waiter due to updates from our thread is no longer relevant, he is only waiting
-    // for other threads.
-    //
-    // TODO: this introduces more read-side contention on the epoch id, does it really improve performance?
-    // it may slow waiters down by slowing their increment of the epoch id due to the cache-line being contended.
-    thread_fetch_new_epoch_id_and_update_waiters(storage_slot, false);
 }
 
 pub trait TokioRuntimeBuilderExt {
@@ -328,14 +319,20 @@ pub trait TokioRuntimeBuilderExt {
 
 impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
     fn enable_rcu(&mut self) -> &mut Self {
+        assert!(membarrier::is_supported());
+        membarrier::register();
+
         self.on_thread_start(|| {
             on_thread_start();
         })
         .on_thread_stop(|| {
             on_thread_stop();
         })
-        .on_before_task_poll(|_| {
-            on_before_task_poll();
+        .on_thread_park(|| {
+            on_thread_park();
+        })
+        .on_thread_unpark(|| {
+            on_thread_unpark();
         })
         .on_after_task_poll(|_| {
             on_after_task_poll();

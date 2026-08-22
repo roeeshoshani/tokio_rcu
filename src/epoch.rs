@@ -21,6 +21,7 @@ pub const EPOCH_ID_MAX: EpochId = EpochId::MAX - 1;
 static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN);
 
 /// an error returned when an overflow is detected while trying to increment the epoch id.
+#[derive(Debug)]
 pub struct EpochIdOverflowErr {
     is_leader: bool,
 }
