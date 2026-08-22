@@ -187,7 +187,7 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     }
 }
 
-thread_local! {
+loom::thread_local! {
     static THREAD_STORAGE_SLOT: Cell<Option<ThreadStorageSlotId>> = Cell::new(None);
 }
 
@@ -352,7 +352,7 @@ impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
 // tokio runtime.
 // do not use these unless you know what you are doing.
 #[cfg(loom)]
-pub mod loom {
+pub mod loom_tests_api {
     /// initializes the runtime
     ///
     /// # safety

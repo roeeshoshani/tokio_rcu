@@ -22,25 +22,25 @@ where
 #[test]
 fn no_uaf_basic() {
     loom::model(|| {
-        tokio_rcu::loom::initialize();
+        tokio_rcu::loom_tests_api::initialize();
 
         let state = Arc::new(Rcu::new(String::from("initial")));
         let worker1 = loom::thread::spawn({
             let state = state.clone();
             move || {
-                tokio_rcu::loom::on_thread_start();
+                tokio_rcu::loom_tests_api::on_thread_start();
                 let guard = state.read();
                 assert!(*guard == "initial" || *guard == "new");
-                tokio_rcu::loom::on_thread_stop();
+                tokio_rcu::loom_tests_api::on_thread_stop();
             }
         });
 
         // main thread is the second worker thread
         {
-            tokio_rcu::loom::on_thread_start();
+            tokio_rcu::loom_tests_api::on_thread_start();
             let prev = busy_block_on_future(state.swap(String::from("new")));
             assert_eq!(prev, "initial");
-            tokio_rcu::loom::on_thread_stop();
+            tokio_rcu::loom_tests_api::on_thread_stop();
         }
 
         worker1.join().unwrap();
