@@ -27,6 +27,12 @@ pub struct Atomic<T: HasAtomicType> {
     #[cfg(not(loom))]
     inner: RawAtomic<T>,
 
+    // loom's atomic `new` function is not const and can't be used in const contexts, but throughout this crate, we very often
+    // need to use the atomic `new` function in const contexts, for example for initializing static variables of an atomic int
+    // type.
+    // so, we use a oncelock for the loom case.
+    // BUG: the oncelock has its own memory ordering, so using it actually prevents the exact bugs we are trying to test.
+    // TODO: think of a better way to do this that doesn't affect ordering.
     #[cfg(loom)]
     inner: OnceLock<RawAtomic<T>>,
     #[cfg(loom)]
