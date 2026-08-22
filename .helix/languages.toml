@@ -1,3 +1,2 @@
 [language-server.rust-analyzer.config.cargo]
 allFeatures = true
-cfgs = ["loom"]
