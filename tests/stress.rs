@@ -1,3 +1,5 @@
+#![cfg(not(loom))]
+
 use std::{sync::Arc, time::Duration};
 
 use tokio_rcu::{Rcu, TokioRuntimeBuilderExt};
