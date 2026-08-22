@@ -314,6 +314,11 @@ pub trait TokioRuntimeBuilderExt {
     fn enable_rcu(&mut self) -> &mut Self;
 }
 
+fn membarrier_check_support_and_register() {
+    assert!(membarrier::is_supported());
+    membarrier::register();
+}
+
 // note that this does not work in `cfg(loom)` since tokio doesn't provide the required hooks (e.g. `on_thread_start`) when
 // the loom config is enabled.
 // in loom mode, for testing only, we instead expose the hook functions directly so that they can be tested independently
@@ -321,8 +326,7 @@ pub trait TokioRuntimeBuilderExt {
 #[cfg(not(loom))]
 impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
     fn enable_rcu(&mut self) -> &mut Self {
-        assert!(membarrier::is_supported());
-        membarrier::register();
+        membarrier_check_support_and_register();
 
         self.on_thread_start(|| {
             on_thread_start();
@@ -348,19 +352,22 @@ impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
 // do not use these unless you know what you are doing.
 #[cfg(loom)]
 pub mod loom {
-    pub fn loom_on_thread_start() {
+    pub fn initialize() {
+        crate::membarrier_check_support_and_register();
+    }
+    pub fn on_thread_start() {
         crate::on_thread_start()
     }
-    pub fn loom_on_thread_stop() {
+    pub fn on_thread_stop() {
         crate::on_thread_stop()
     }
-    pub fn loom_on_thread_park() {
+    pub fn on_thread_park() {
         crate::on_thread_park()
     }
-    pub fn loom_on_thread_unpark() {
+    pub fn on_thread_unpark() {
         crate::on_thread_unpark()
     }
-    pub fn loom_on_after_task_poll() {
+    pub fn on_after_task_poll() {
         crate::on_after_task_poll()
     }
 }
