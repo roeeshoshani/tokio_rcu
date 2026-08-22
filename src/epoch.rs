@@ -1,6 +1,5 @@
-use std::sync::atomic;
-
 use crate::atomic_type::Atomic;
+use crate::loom_or_std::sync::atomic;
 
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
 ///
@@ -18,7 +17,13 @@ pub const EPOCH_ID_MIN: EpochId = 2;
 /// thus, its max value is not the underlying integer type's max value, instead it is 1 less.
 pub const EPOCH_ID_MAX: EpochId = EpochId::MAX - 1;
 
+#[cfg(not(loom))]
 static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN);
+
+// loom's `Atomic*::new` function is not const, so we can't directly initialize an atomic variable like in the non loom case.
+// so, we must use some other mechanism.
+#[cfg(loom)]
+static CUR_EPOCH_ID: std::sync::OnceLock<Atomic<EpochId>> = std::sync::OnceLock::new();
 
 /// an error returned when an overflow is detected while trying to increment the epoch id.
 #[derive(Debug)]
@@ -35,10 +40,47 @@ impl EpochIdOverflowErr {
     }
 }
 
+/// provides access to the variable containing the current epoch id.
+/// this functions exists to hide the details of how the epoch id is implemented in loom mode versus regular mode.
+fn access_cur_epoch_id() -> &'static Atomic<EpochId> {
+    #[cfg(not(loom))]
+    {
+        &CUR_EPOCH_ID
+    }
+
+    #[cfg(loom)]
+    {
+        CUR_EPOCH_ID.get_or_init(|| Atomic::<EpochId>::new(EPOCH_ID_MIN))
+    }
+}
+
 /// loads the current epoch id atomically with the given ordering. this only performs a single atomic load operation.
 #[inline]
 pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
-    CUR_EPOCH_ID.load(ordering)
+    access_cur_epoch_id().load(ordering)
+}
+
+/// a function which performs a [`try_update`](std::sync::atomic::AtomicUsize::try_update) operation on the epoch id.
+/// selects between the loom and the std API depending on the current configuration.
+/// this is needed since loom's `try_update` function has a different name than the stdlib one.
+#[inline]
+fn epoch_id_try_update<F>(
+    set_order: atomic::Ordering,
+    fetch_order: atomic::Ordering,
+    f: F,
+) -> Result<EpochId, EpochId>
+where
+    F: FnMut(EpochId) -> Option<EpochId>,
+{
+    #[cfg(loom)]
+    {
+        access_cur_epoch_id().fetch_update(set_order, fetch_order, f)
+    }
+
+    #[cfg(not(loom))]
+    {
+        access_cur_epoch_id().try_update(set_order, fetch_order, f)
+    }
 }
 
 /// increments the epoch id atomically, returning the new epoch id after the increment.
@@ -53,7 +95,7 @@ pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
 /// in the failure case, the increment may or many not happen, and if it does, it happens with relaxed ordering.
 #[inline]
 pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
-    match CUR_EPOCH_ID.try_update(
+    match epoch_id_try_update(
         // for the success case, we may want release ordering, but only if the value is still below the overflow threshold.
         //
         // so, we will use conditionally apply an atomic fence later if we determine that we need to, while here we just use a
@@ -96,5 +138,5 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
 
 /// directly sets the epoch id to the given value with the given ordering.
 pub fn epoch_id_set(new_value: EpochId, ordering: atomic::Ordering) {
-    CUR_EPOCH_ID.store(new_value, ordering);
+    access_cur_epoch_id().store(new_value, ordering);
 }

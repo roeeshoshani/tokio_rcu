@@ -1,8 +1,6 @@
-use std::{
-    ops::Deref,
-    sync::atomic::{self, AtomicPtr},
-};
+use std::ops::Deref;
 
+use crate::loom_or_std::sync::atomic::{self, AtomicPtr};
 use crate::{
     synchronize_rcu,
     utils::{PhantomUnsendUnsync, PtrMutSendSync},

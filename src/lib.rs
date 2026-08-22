@@ -1,4 +1,4 @@
-use std::{cell::Cell, sync::atomic};
+use loom_or_std::{cell::Cell, sync::atomic};
 
 use tokio::sync::Notify;
 
@@ -13,6 +13,7 @@ use crate::{
 
 mod atomic_type;
 mod epoch;
+mod loom_or_std;
 mod membarrier;
 mod per_thread_storage;
 mod rcu;

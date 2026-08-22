@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32};
+use crate::loom_or_std::sync::atomic::{AtomicU8, AtomicU16, AtomicU32};
 
 pub type Atomic<T> = <T as HasAtomicType>::AtomicType;
 
