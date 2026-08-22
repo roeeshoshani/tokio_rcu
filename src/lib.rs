@@ -1,7 +1,4 @@
-use std::{
-    cell::Cell,
-    sync::atomic::{self},
-};
+use std::{cell::Cell, sync::atomic};
 
 use tokio::sync::Notify;
 
