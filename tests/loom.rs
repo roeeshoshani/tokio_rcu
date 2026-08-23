@@ -15,6 +15,9 @@ where
         if let Poll::Ready(res) = pinned.as_mut().poll(&mut context) {
             return res;
         }
+
+        tokio_rcu::loom_tests_api::on_after_task_poll();
+
         loom::thread::yield_now();
     }
 }
