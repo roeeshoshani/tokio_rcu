@@ -21,9 +21,10 @@ where
 
 #[test]
 fn no_uaf_basic() {
-    loom::model(|| {
-        tokio_rcu::loom_tests_api::initialize();
+    // SAFETY: called once at the start
+    unsafe { tokio_rcu::loom_tests_api::initialize() };
 
+    loom::model(|| {
         let state = Arc::new(Rcu::new(String::from("initial")));
         let worker1 = loom::thread::spawn({
             let state = state.clone();

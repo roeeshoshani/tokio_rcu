@@ -77,6 +77,7 @@ unsafe impl<T: HasAtomicType> Sync for Atomic<T> {}
 
 macro_rules! impl_atomic_type {
     {$int_ty: ty} => {
+        #[allow(unused)]
         impl Atomic<$int_ty> {
             /// creates a new atomic variable with the given initial value.
             ///

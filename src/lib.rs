@@ -187,15 +187,41 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     }
 }
 
-loom::thread_local! {
+loom_or_std::thread_local! {
     static THREAD_STORAGE_SLOT: Cell<Option<ThreadStorageSlotId>> = Cell::new(None);
+}
+
+/// returns the storage slot id of the current thread, assuming that a storage slot was already allocated for the current
+/// thread.
+fn this_thread_get_storage_slot_id() -> ThreadStorageSlotId {
+    #[cfg(not(loom))]
+    {
+        THREAD_STORAGE_SLOT.get().unwrap()
+    }
+    #[cfg(loom)]
+    {
+        THREAD_STORAGE_SLOT.with(|x| x.get()).unwrap()
+    }
+}
+
+/// sets the storage slot id of the current thread.
+fn this_thread_set_storage_slot_id(value: Option<ThreadStorageSlotId>) {
+    #[cfg(not(loom))]
+    {
+        THREAD_STORAGE_SLOT.set(value)
+    }
+    #[cfg(loom)]
+    {
+        THREAD_STORAGE_SLOT.with(|x| {
+            x.set(value);
+        })
+    }
 }
 
 /// returns the storage slot of the current thread, assuming that a storage slot was already allocated for the current
 /// thread.
 fn this_thread_get_storage_slot() -> &'static ThreadStorageSlotValue {
-    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
-    thread_storage_slot_get(storage_slot_id)
+    thread_storage_slot_get(this_thread_get_storage_slot_id())
 }
 
 /// "see" a new epoch id in the current thread.
@@ -222,13 +248,13 @@ fn on_thread_start() {
     })
     .expect("too many concurrent threads, failed to allocate a storage slot for a new thread");
 
-    THREAD_STORAGE_SLOT.set(Some(storage_slot));
+    this_thread_set_storage_slot_id(Some(storage_slot));
 }
 
 fn on_thread_stop() {
-    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
+    let storage_slot_id = this_thread_get_storage_slot_id();
     thread_storage_slot_free(storage_slot_id);
-    THREAD_STORAGE_SLOT.set(None);
+    this_thread_set_storage_slot_id(None);
 }
 
 fn on_thread_park() {
