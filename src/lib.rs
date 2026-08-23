@@ -373,27 +373,22 @@ impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
     }
 }
 
-// in loom mode, tokio doesn't provide the necessary runtime hooks (e.g. `on_thread_start`), so we can't use the `enable_rcu`
-// function for testing. instead, we expose the internal hook functions so that they can be tested independently of the
-// tokio runtime.
-// do not use these unless you know what you are doing.
+/// in loom mode, tokio doesn't provide the necessary runtime hooks (e.g. `on_thread_start`), so we can't use the `enable_rcu`
+/// function for testing. instead, we expose the internal hook functions so that they can be tested independently of the
+/// tokio runtime.
+/// do not use these unless you know what you are doing.
 #[cfg(loom)]
 pub mod loom_tests_api {
     /// initializes the runtime.
     ///
-    /// can be called multiple times, only the first time will actually perform any intialization. this is important since it allows
-    /// once to put a call to this at the start of a `loom::model` call.
+    /// must be called before spawning any threads in the program and before doing any tokio rcu related work.
     ///
-    /// # safety
-    ///
-    /// - must be called before any other access to this variable.
-    /// - must be called before spawning any threads in the program.
-    pub unsafe fn initialize() {
-        static INIT_ONCE: std::sync::Once = std::sync::Once::new();
-        INIT_ONCE.call_once(|| {
+    /// can be called multiple times, but only the first call will actually do the initialization. this part is for convenience.
+    /// for example, you can call it at the start of each test, and it will work just fine even though the tests run as threads.
+    pub fn initialize() {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| {
             crate::membarrier_check_support_and_register();
-            unsafe { crate::epoch::epoch_id_init() };
-            unsafe { crate::per_thread_storage::thread_storage_slots_init() };
         });
     }
     pub fn on_thread_start() {

@@ -21,6 +21,7 @@ pub struct ThreadStorageSlotValue {
     pub state: Atomic<EncodedThreadState>,
 }
 
+#[cfg(not(loom))]
 static THREAD_STORAGE_SLOTS: TypedArray<
     ThreadStorageSlotId,
     ThreadStorageSlotValue,
@@ -28,22 +29,22 @@ static THREAD_STORAGE_SLOTS: TypedArray<
 > = TypedArray::from_array(
     [const {
         ThreadStorageSlotValue {
-            // SAFETY: see [`thread_storage_slots_init`].
-            state: unsafe { Atomic::<EncodedThreadState>::new(0) },
+            state: Atomic::<EncodedThreadState>::new(0),
         }
     }; MAX_CONCURRENT_THREADS],
 );
 
-/// initializes thread storage slots. must be called before using any other thread storage related function.
-///
-/// # safety
-///
-/// see [`Atomic::init`].
 #[cfg(loom)]
-pub unsafe fn thread_storage_slots_init() {
-    for slot in &THREAD_STORAGE_SLOTS {
-        unsafe { slot.state.init() };
-    }
+loom::lazy_static! {
+    static ref THREAD_STORAGE_SLOTS: TypedArray<
+        ThreadStorageSlotId,
+        ThreadStorageSlotValue,
+        MAX_CONCURRENT_THREADS,
+    > = TypedArray::from_array(std::array::from_fn(|_| {
+        ThreadStorageSlotValue {
+            state: Atomic::<EncodedThreadState>::new(0),
+        }
+    }));
 }
 
 pub fn thread_storage_slot_get_all() -> &'static [ThreadStorageSlotValue] {

@@ -1,5 +1,4 @@
-use crate::atomic_type::Atomic;
-use crate::loom_or_std::sync::atomic;
+use crate::{atomic_type::Atomic, loom_or_std::sync::atomic};
 
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
 ///
@@ -17,17 +16,12 @@ pub const EPOCH_ID_MIN: EpochId = 2;
 /// thus, its max value is not the underlying integer type's max value, instead it is 1 less.
 pub const EPOCH_ID_MAX: EpochId = EpochId::MAX - 1;
 
-// SAFETY: see [`epoch_id_init`].
-static CUR_EPOCH_ID: Atomic<EpochId> = unsafe { Atomic::<EpochId>::new(EPOCH_ID_MIN) };
+#[cfg(not(loom))]
+static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN);
 
-/// initializes the epoch id. must be called before using any other epoch id related function.
-///
-/// # safety
-///
-/// see [`Atomic::init`].
 #[cfg(loom)]
-pub unsafe fn epoch_id_init() {
-    unsafe { CUR_EPOCH_ID.init() };
+loom::lazy_static! {
+    static ref CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN);
 }
 
 /// an error returned when an overflow is detected while trying to increment the epoch id.
