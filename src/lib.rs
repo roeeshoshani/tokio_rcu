@@ -379,17 +379,22 @@ impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
 // do not use these unless you know what you are doing.
 #[cfg(loom)]
 pub mod loom_tests_api {
-    /// initializes the runtime
+    /// initializes the runtime.
+    ///
+    /// can be called multiple times, only the first time will actually perform any intialization. this is important since it allows
+    /// once to put a call to this at the start of a `loom::model` call.
     ///
     /// # safety
     ///
     /// - must be called before any other access to this variable.
-    /// - must only be called exactly once.
     /// - must be called before spawning any threads in the program.
     pub unsafe fn initialize() {
-        crate::membarrier_check_support_and_register();
-        unsafe { crate::epoch::epoch_id_init() };
-        unsafe { crate::per_thread_storage::thread_storage_slots_init() };
+        static INIT_ONCE: std::sync::Once = std::sync::Once::new();
+        INIT_ONCE.call_once(|| {
+            crate::membarrier_check_support_and_register();
+            unsafe { crate::epoch::epoch_id_init() };
+            unsafe { crate::per_thread_storage::thread_storage_slots_init() };
+        });
     }
     pub fn on_thread_start() {
         crate::on_thread_start()
