@@ -260,15 +260,19 @@ mod tests {
             notify: Notify::new(),
             value: AtomicUsize::new(5),
         });
+
+        // start listening to notifications before spawning the writer task to make sure we see his notification.
+        let notified = state.notify.notified();
+
         let task = tokio::task::spawn({
             let state = state.clone();
             async move {
-                state.notify.notified().await;
-                assert_eq!(state.value.load(atomic::Ordering::Relaxed), 12);
+                state.value.store(12, atomic::Ordering::Relaxed);
+                state.notify.notify();
             }
         });
-        state.value.store(12, atomic::Ordering::Relaxed);
-        state.notify.notify();
+        notified.await;
+        assert_eq!(state.value.load(atomic::Ordering::Relaxed), 12);
 
         task.await.unwrap();
     }
