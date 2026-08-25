@@ -1,9 +1,8 @@
 use std::{cell::Cell, sync::atomic};
 
-use tokio::sync::Notify;
-
 use crate::{
     epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
+    notify::Notify,
     per_thread_storage::{
         ThreadStorageSlotId, ThreadStorageSlotValue, thread_storage_slot_alloc,
         thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
@@ -25,11 +24,11 @@ pub use rcu::{Rcu, RcuReadGuard};
 /// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful
 /// way (e.g. become busy). used by waiters to wait for notifications in a blocking manner while waiting for threads to see
 /// their new epoch id.
-static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::const_new();
+static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::new();
 
 static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
-static RESET_FINISHED_NOTIFICATION: Notify = Notify::const_new();
+static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 
 /// wait for an RCU grace period.
 async fn synchronize_rcu() {
@@ -88,7 +87,7 @@ async fn synchronize_rcu() {
                 drop(reset_sync_write_guard);
 
                 // wake all non-leader waiters that are in reset mode waiting for us to finish.
-                RESET_FINISHED_NOTIFICATION.notify_waiters();
+                RESET_FINISHED_NOTIFICATION.notify();
             } else {
                 // start listening to reset notification from the leader.
                 //
@@ -247,7 +246,7 @@ fn on_thread_park() {
     // so we will never see it.
     // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected
     // pointers.
-    THREAD_EPOCH_UPDATED_NOTIFY.notify_waiters();
+    THREAD_EPOCH_UPDATED_NOTIFY.notify();
 }
 
 fn on_thread_unpark() {
@@ -306,7 +305,7 @@ fn on_after_task_poll() {
 
     if prev_state.last_seen_epoch_id != new_seen_epoch_id {
         // if the last seen epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.
-        THREAD_EPOCH_UPDATED_NOTIFY.notify_waiters();
+        THREAD_EPOCH_UPDATED_NOTIFY.notify();
     }
 }
 

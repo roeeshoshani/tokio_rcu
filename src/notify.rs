@@ -86,7 +86,7 @@ struct Slot {
     // some fields. furthermore, since `Slot` is a field inside `Notified`, the `&mut Notified` basically implies `&mut Slot`.
     // so, in that case, we are reading/writing a pointer which points to data which is currently used as part of a mutable reference.
     // this is normally UB, but `PhantomPinned` currently provides an escape hatch.
-    phantom: PhantomPinned,
+    _phantom: PhantomPinned,
 }
 impl Slot {
     fn new() -> Self {
@@ -95,7 +95,7 @@ impl Slot {
             waker: UnsafeCell::new(None),
             next: UnsafeCell::new(None),
             is_in_list: UnsafeCell::new(false),
-            phantom: PhantomPinned,
+            _phantom: PhantomPinned,
         }
     }
 }
