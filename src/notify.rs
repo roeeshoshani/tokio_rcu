@@ -276,4 +276,38 @@ mod tests {
 
         task.await.unwrap();
     }
+
+    #[tokio::test]
+    async fn multiple_wakers() {
+        struct State {
+            notify: Notify,
+            value: AtomicUsize,
+        }
+        let state = Arc::new(State {
+            notify: Notify::new(),
+            value: AtomicUsize::new(5),
+        });
+
+        // start listening to notifications before spawning the writer task to make sure we see his notification.
+        let notified = state.notify.notified();
+
+        let tasks: Vec<_> = (0..32)
+            .map(|i| {
+                tokio::task::spawn({
+                    let state = state.clone();
+                    async move {
+                        state.value.store(1234 + i, atomic::Ordering::Relaxed);
+                        state.notify.notify();
+                    }
+                })
+            })
+            .collect();
+
+        notified.await;
+        assert!((1234..1234 + 32).contains(&state.value.load(atomic::Ordering::Relaxed)));
+
+        for task in tasks {
+            task.await.unwrap()
+        }
+    }
 }
