@@ -21,16 +21,18 @@ impl Notify {
         }
     }
 
-    /// provides acquire memory ordering
+    /// provides acquire memory ordering against the waker when you are finished awaiting it.
     pub fn notified(&self) -> Notified<'_> {
         Notified::new(self)
     }
 
-    /// provides release memory ordering
+    /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any waker after you.
     pub fn notify(&self) {
         self.num_wakeups.fetch_add(
             1,
             // need release ordering for the memory ordering guarantees chosen for this data structure.
+            // note that due to this operation being a RMW operation, it also preserves the existing release-sequence, without having to
+            // use an acquire ordering here (for more info on release-sequences, see c++ memory model).
             atomic::Ordering::Release,
         );
 
@@ -279,6 +281,8 @@ mod tests {
 
     #[tokio::test]
     async fn multiple_wakers() {
+        const NUM_WAKERS: usize = 32;
+
         struct State {
             notify: Notify,
             value: AtomicUsize,
@@ -291,7 +295,7 @@ mod tests {
         // start listening to notifications before spawning the writer task to make sure we see his notification.
         let notified = state.notify.notified();
 
-        let tasks: Vec<_> = (0..32)
+        let tasks: Vec<_> = (0..NUM_WAKERS)
             .map(|i| {
                 tokio::task::spawn({
                     let state = state.clone();
@@ -304,9 +308,70 @@ mod tests {
             .collect();
 
         notified.await;
-        assert!((1234..1234 + 32).contains(&state.value.load(atomic::Ordering::Relaxed)));
+        assert!((1234..1234 + NUM_WAKERS).contains(&state.value.load(atomic::Ordering::Relaxed)));
 
         for task in tasks {
+            task.await.unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn multiple_waiters_and_wakers() {
+        const NUM_WAITERS: usize = 32;
+        const NUM_WAKERS: usize = 32;
+
+        struct State {
+            num_done_setup: AtomicUsize,
+            done_setup_notify: Notify,
+            notify: Notify,
+            value: AtomicUsize,
+        }
+        let state = Arc::new(State {
+            num_done_setup: AtomicUsize::new(0),
+            done_setup_notify: Notify::new(),
+            notify: Notify::new(),
+            value: AtomicUsize::new(5),
+        });
+
+        let waiter_tasks: Vec<_> = (0..NUM_WAITERS)
+            .map(|_| {
+                tokio::task::spawn({
+                    let state = state.clone();
+                    async move {
+                        let notified = state.notify.notified();
+                        // release ordering paired with acquire for the leader thread is needed to make sure that before the
+                        // leader thread calls notify, he sees all writes previously performed by any threads, thus guaranteeing that
+                        // the setup is actually done for all threads once the done setup notify is notified.
+                        if state.num_done_setup.fetch_add(1, atomic::Ordering::Release) + 1
+                            == NUM_WAITERS
+                        {
+                            atomic::fence(atomic::Ordering::Acquire);
+                            state.done_setup_notify.notify();
+                        }
+                        notified.await;
+                        assert!(
+                            (1234..1234 + NUM_WAKERS)
+                                .contains(&state.value.load(atomic::Ordering::Relaxed))
+                        );
+                    }
+                })
+            })
+            .collect();
+
+        let waker_tasks: Vec<_> = (0..NUM_WAKERS)
+            .map(|i| {
+                tokio::task::spawn({
+                    let state = state.clone();
+                    async move {
+                        state.done_setup_notify.notified().await;
+                        state.value.store(1234 + i, atomic::Ordering::Relaxed);
+                        state.notify.notify();
+                    }
+                })
+            })
+            .collect();
+
+        for task in waker_tasks.into_iter().chain(waiter_tasks.into_iter()) {
             task.await.unwrap()
         }
     }
