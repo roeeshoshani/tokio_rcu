@@ -68,6 +68,8 @@ impl Notify {
         }
     }
 }
+unsafe impl Send for Notify {}
+unsafe impl Sync for Notify {}
 
 type Next = Option<NonNull<Slot>>;
 struct Slot {
@@ -199,6 +201,9 @@ impl<'a> Future for Notified<'a> {
     }
 }
 
+unsafe impl<'a> Send for Notified<'a> {}
+unsafe impl<'a> Sync for Notified<'a> {}
+
 impl<'a> Drop for Notified<'a> {
     fn drop(&mut self) {
         let _guard = self.notify.lock.lock().unwrap();
@@ -236,5 +241,35 @@ impl<'a> Drop for Notified<'a> {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn basic() {
+        struct State {
+            notify: Notify,
+            value: AtomicUsize,
+        }
+        let state = Arc::new(State {
+            notify: Notify::new(),
+            value: AtomicUsize::new(5),
+        });
+        let task = tokio::task::spawn({
+            let state = state.clone();
+            async move {
+                state.notify.notified().await;
+                assert_eq!(state.value.load(atomic::Ordering::Relaxed), 12);
+            }
+        });
+        state.value.store(12, atomic::Ordering::Relaxed);
+        state.notify.notify();
+
+        task.await.unwrap();
     }
 }
