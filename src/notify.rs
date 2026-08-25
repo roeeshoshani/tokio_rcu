@@ -333,6 +333,8 @@ mod tests {
             value: AtomicUsize::new(5),
         });
 
+        let done_setup = state.done_setup_notify.notified();
+
         let waiter_tasks: Vec<_> = (0..NUM_WAITERS)
             .map(|_| {
                 tokio::task::spawn({
@@ -358,12 +360,13 @@ mod tests {
             })
             .collect();
 
+        done_setup.await;
+
         let waker_tasks: Vec<_> = (0..NUM_WAKERS)
             .map(|i| {
                 tokio::task::spawn({
                     let state = state.clone();
                     async move {
-                        state.done_setup_notify.notified().await;
                         state.value.store(1234 + i, atomic::Ordering::Relaxed);
                         state.notify.notify();
                     }
