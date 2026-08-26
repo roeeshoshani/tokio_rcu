@@ -8,6 +8,11 @@ use crate::atomic_type::Atomic;
 ///
 /// the fact that all epoch ids are even allows us to encode information in the least significant bit.
 /// and, the fact that the epoch id is non-zero allows us to encode an empty thread state value as just a 0 value.
+#[cfg(not(test))]
+pub type EpochId = u32;
+
+// for testing, use a small type for the epoch id so that we actually experience overflows and check that code path.
+#[cfg(test)]
 pub type EpochId = u16;
 
 /// the minimum valid epoch id value.
