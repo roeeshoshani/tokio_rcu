@@ -57,7 +57,7 @@ async fn synchronize_rcu() {
             // epoch id overflow.
 
             // perform a reset of the epoch id
-            if err.am_i_the_leader() {
+            if err.am_i_the_leader {
                 // re-lock the reset sync lock for writing.
                 //
                 // once we succeed grabbing the write lock, it is guaranteed that all current waiters have started listening to the reset

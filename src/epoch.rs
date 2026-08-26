@@ -23,21 +23,23 @@ pub const EPOCH_ID_MIN: EpochId = 2;
 /// thus, its max value is not the underlying integer type's max value, instead it is 1 less.
 pub const EPOCH_ID_MAX: EpochId = EpochId::MAX - 1;
 
+/// the current global epoch id.
+/// its value must always be a valid epoch id value.
+///
+/// used to synchronize threads that are waiting for a grace period with all other threads, by making all threads constantly load this
+/// value and publish their last seen epoch id.
+/// a waiter can then increment it and wait until all threads see his increment in their last seen epoch id value.
 static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN);
 
 /// an error returned when an overflow is detected while trying to increment the epoch id.
 #[derive(Debug)]
 pub struct EpochIdOverflowErr {
-    is_leader: bool,
-}
-impl EpochIdOverflowErr {
-    /// returns whether you are the leader of the overflow of the epoch id, that is, whether you are the exact increment that brought
-    /// the epoch id to its max value.
-    ///
+    /// when an overflow occurs, we enter a heavy synchronization state where we restore the epoch id back to its minimum.
+    /// during this period, before we enter that heavy synchronization mode, more threads may try to increment the epoch id even further.
+    /// but, only one thread will be the first thread to increment the epoch id past the max allowed value. this thread is called the
+    /// leader.
     /// for every overflow of the epoch id, there is exactly one leader.
-    pub fn am_i_the_leader(&self) -> bool {
-        self.is_leader
-    }
+    pub am_i_the_leader: bool,
 }
 
 /// loads the current epoch id atomically with the given ordering. this only performs a single atomic load operation.
@@ -51,9 +53,9 @@ pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
 /// if the epoch id would overflow due to the increment, this function returns an error, and the epoch id is guaranteed to be set to its
 /// max value until reset.
 ///
-/// in case this function succeeds, the increment has release ordering, guaranteeing that the swap of the
-/// rcu protected pointer happens before the increment of the epoch id whenever the epoch id is loaded with acquire ordering when the
-/// threads pass through a quiescent state.
+/// in case this function succeeds, the increment has release ordering, guaranteeing that the swap of the rcu protected pointer happens
+/// before the increment of the epoch id whenever the epoch id is loaded with acquire ordering when the threads pass through a quiescent
+/// state.
 ///
 /// in the failure case, the increment may or many not happen, and if it does, it happens with relaxed ordering.
 #[inline]
@@ -81,7 +83,9 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
                 // all quiescent states will see this value and understand that they need to reset their last seen epoch id.
                 //
                 // all new waiters will fail the increment and will thus also enter the reset state.
-                return Err(EpochIdOverflowErr { is_leader: true });
+                return Err(EpochIdOverflowErr {
+                    am_i_the_leader: true,
+                });
             }
 
             // for the success case, we want release ordering to guarantee that the swapping of the rcu protected pointer happens before
@@ -94,7 +98,9 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
             // sanity
             debug_assert_eq!(prev_epoch_id, EPOCH_ID_MAX);
 
-            Err(EpochIdOverflowErr { is_leader: false })
+            Err(EpochIdOverflowErr {
+                am_i_the_leader: false,
+            })
         }
     }
 }
