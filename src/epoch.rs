@@ -57,15 +57,22 @@ pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
 /// before the increment of the epoch id whenever the epoch id is loaded with acquire ordering when the threads pass through a quiescent
 /// state.
 ///
-/// in the failure case, the increment may or many not happen, and if it does, it happens with relaxed ordering.
+/// in the failure case, the increment may or many not happen, and if it does, it happens with release ordering.
 #[inline]
 pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
     match CUR_EPOCH_ID.try_update(
-        // for the success case, we may want release ordering, but only if the value is still below the overflow threshold.
+        // for the success case, we want release ordering to guarantee that the swapping of the rcu protected pointer happens before
+        // the increment of the epoch id, otherwise someone may see the increment before the swap of the pointer, causing us to release
+        // the data, where he would then try using that freed data.
+        atomic::Ordering::Release,
+        // for the load part we don't need any ordering since we are not synchronizing with the previous value in any way.
         //
-        // so, we will use conditionally apply an atomic fence later if we determine that we need to, while here we just use a
-        // relaxed ordering.
-        atomic::Ordering::Relaxed,
+        // the only relevance of the previous value is for determining whether we are the leader of the overflow in case of overflow,
+        // but that only requires atomicity, not any special ordering.
+        // TODO: do we really not need acquire ordering when we are not the leader? check the rest of the code.
+        //
+        // furthermore, note that due to this being a rmw operation, this does not break the existing release-sequence of this variable,
+        // so anyone loading our specific store will still synchronize with all previous incrementors.
         atomic::Ordering::Relaxed,
         |epoch_id| epoch_id.checked_add(2),
     ) {
@@ -88,10 +95,6 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
                 });
             }
 
-            // for the success case, we want release ordering to guarantee that the swapping of the rcu protected pointer happens before
-            // the increment of the epoch id, otherwise someone may see the increment before the swap of the pointer, causing us to release
-            // the data, where he would then try using that freed data.
-            atomic::fence(atomic::Ordering::Release);
             Ok(new_epoch_id)
         }
         Err(prev_epoch_id) => {

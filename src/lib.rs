@@ -147,9 +147,6 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         //
         // so, we start listening before checking the values, so that even notifications that are issued while
         // or right after we finished checking are still received.
-        //
-        // TODO: should i implement my own optimized primitive for this instead of tokio's `Notify` for better
-        // peformance?
         let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
 
         // check if all threads have seen our new epoch id
