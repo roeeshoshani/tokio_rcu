@@ -8,12 +8,35 @@ use crate::atomic_type::Atomic;
 ///
 /// the fact that all epoch ids are even allows us to encode information in the least significant bit.
 /// and, the fact that the epoch id is non-zero allows us to encode an empty thread state value as just a 0 value.
-#[cfg(not(test))]
-pub type EpochId = u32;
-
-// for testing, use a small type for the epoch id so that we actually experience overflows and check that code path.
-#[cfg(test)]
-pub type EpochId = u16;
+pub type EpochId = cfg_select! {
+    feature = "small_epoch_id" => {
+        // the small epoch id config is used for the integration tests, for testing the logic handling the epoch id overflow.
+        // the default epoch id is too big to overflow during the tests (it would take a lot of time to overflow it).
+        // this config shrinks the size of the epoch id so that it becomes reasonable to overflow it during the tests, for making sure
+        // that the overflow handling logic works fine.
+        //
+        // ideally, we want a type that is small enough to overflow during the tests.
+        // but, note that we can't use a u8 since it overflows so fast that we trigger the path where the epoch id overflows twice in a
+        // row, which is assumed to never happen since the epoch id is assumed to have a reasonable size.
+        //
+        // so, u16 is the sweet spot where we can easily overflow it, but is big enough to not overflow twice in a row.
+        u16
+    }
+    _ => {
+        // for the default case, use a u32.
+        //
+        // the choice of the size of the epoch id affects 2 things:
+        // - it affects the memory usage of this crate, since it determines the size of the per-thread state storage.
+        // - it affects how frequently the epoch id overflows, which determines how frequently we need to perform a full synchronization.
+        //
+        // on the one hand, we want it to be as small as possible, to avoid wasting too much memory on the per thread state storage.
+        // on the other hand, we want it to be as big as possible to make overflow synchronizations as infrequent as possible, since those
+        // synchronization operations are very expensive.
+        //
+        // using a u32 seems to be a good balance between the two constraints.
+        u32
+    }
+};
 
 /// the minimum valid epoch id value.
 pub const EPOCH_ID_MIN: EpochId = 2;

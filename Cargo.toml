@@ -16,3 +16,9 @@ windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
 tokio = { version = "1.53.1", features = ["full"] }
+
+[features]
+# a feature flag which when enabled, makes the epoch id smaller.
+# this is mainly used for testing, since using a small epoch id makes it easier to overflow it in a reasonable time.
+# this is used to check that the code for dealing with the overflow of the epoch id works properly.
+small_epoch_id = []
