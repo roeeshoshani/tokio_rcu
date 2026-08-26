@@ -7,12 +7,15 @@ use std::{
     task::{Poll, Waker},
 };
 
+/// a synchronization data structure used to pass notifications between different tasks.
+/// similar in functionality to [`tokio::sync::Notify`], but a simplified version of it more tailored to the specific use in this crate.
 pub struct Notify {
     num_wakeups: AtomicUsize,
     lock: std::sync::Mutex<()>,
     waiters_list_head: UnsafeCell<Next>,
 }
 impl Notify {
+    /// creates a new notify object.
     pub const fn new() -> Self {
         Self {
             num_wakeups: AtomicUsize::new(0),
@@ -21,12 +24,21 @@ impl Notify {
         }
     }
 
-    /// provides acquire memory ordering against the waker when you are finished awaiting it.
+    /// returns a future which when awaited will wait for a notification.
+    ///
+    /// when this function returns, the returned future has already properly registered itself and is listening to notifications.
+    /// any notification received after this function returns, even if it wasn't `poll`ed or `await`ed yet, will be received by the
+    /// returned future, and once `poll`ed it will complete immediately.
+    ///
+    /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifierr who notified you,
+    /// and all previous notifiers who notified before him.
     pub fn notified(&self) -> Notified<'_> {
         Notified::new(self)
     }
 
-    /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any waker after you.
+    /// notifies all currently registered waiters.
+    ///
+    /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
     pub fn notify(&self) {
         self.num_wakeups.fetch_add(
             1,
@@ -116,13 +128,15 @@ impl Slot {
     }
 }
 
+/// a future which will complete once a notification is received.
+/// the future is registered as soon as it is created, and while registed it is listening to any received notifications.
 pub struct Notified<'a> {
     slot: Slot,
     num_wakeups_snapshot: usize,
     notify: &'a Notify,
 }
 impl<'a> Notified<'a> {
-    pub fn new(notify: &'a Notify) -> Self {
+    fn new(notify: &'a Notify) -> Self {
         Self {
             slot: Slot::new(),
             num_wakeups_snapshot: notify.num_wakeups.load(
