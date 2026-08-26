@@ -22,15 +22,36 @@ mod utils;
 pub use rcu::{Rcu, RcuReadGuard};
 
 /// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful
-/// way (e.g. become busy). used by waiters to wait for notifications in a blocking manner while waiting for threads to see
-/// their new epoch id.
+/// way (e.g. become non-busy). used by waiters to wait for notifications in a blocking manner while waiting for threads to see
+/// their new epoch id, instead of constantly busy polling all threads.
 static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::new();
 
+/// a lock used to synchronize the reset operation.
+/// a reset operation is performed when the epoch id overflows, in order to reset the epoch id back to its minimum value.
+///
+/// when some thread increments the epoch id and causes it to exceed its max threshold, this thread begins a reset operation.
+/// for resetting the epoch id, the thread must reset the global epoch id back to its initial value, then wait for all threads to
+/// see this new state while blocking any further increments of the epoch id until all threads see the reset value.
+///
+/// in order to prevent the further increments of the epoch id during the reset operation, this lock is used.
+/// all incrementors of the epoch id lock it for reading before incrementing, and during the reset operation, the leader of the reset (the
+/// first one to increment the epoch id past its max threshold) locks this lock for writing, thus preventing any new incrementors from
+/// incrementing the epoch id.
 static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
+/// when a thread increments the epoch id past its max threshold, this thread begins a reset operation.
+/// while that thread was incrementing the epoch id, another thread may have also been incrementing the epoch id, and also saw that it
+/// reached its max threshold. so, that thread also begins the reset operation.
+///
+/// in practice, the reset is actually only performed by a single thread - the leader, and all other threads that entered reset just wait
+/// for him to finish resetting.
+///
+/// so, this notification used by the leader of a reset operation to notify all other threads that have also entered reset that the reset
+/// operation is done.
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 
 /// wait for an RCU grace period.
+// TODO: make this public and describe the memory ordering guarantees in more detail.
 async fn synchronize_rcu() {
     // perform a membarrier to make sure that all other threads see the new rcu pointer.
     membarrier::perform();
