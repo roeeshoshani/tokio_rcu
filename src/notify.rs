@@ -30,7 +30,10 @@ impl Notify {
     /// any notification received after this function returns, even if it wasn't `poll`ed or `await`ed yet, will be received by the
     /// returned future, and once `poll`ed it will complete immediately.
     ///
-    /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifierr who notified you,
+    /// the registeration operation performed by this function provides acquire memory ordering, ensuring that all operations performed
+    /// after this function returns are ordered after the registeration operation.
+    ///
+    /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you,
     /// and all previous notifiers who notified before him.
     pub fn notified(&self) -> Notified<'_> {
         Notified::new(self)
@@ -140,11 +143,10 @@ impl<'a> Notified<'a> {
         Self {
             slot: Slot::new(),
             num_wakeups_snapshot: notify.num_wakeups.load(
-                // the value loaded here does not need to be syncrhonized with.
-                // it will not be directly used to decide whether we wake up or not.
-                // only when comparing it with a value that is loaded with acquire ordering, with which we are actually ordering,
-                // we will decide whether to wake up.
-                atomic::Ordering::Relaxed,
+                // the value loaded here does not need to be syncrhonized with, so we don't need any ordering in that sense, but we need
+                // acquire ordering so that the notified registeration operation has acquire semantics, which is relevant for the
+                // users of this primitive.
+                atomic::Ordering::Acquire,
             ),
             notify,
         }
