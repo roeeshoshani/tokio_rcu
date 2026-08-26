@@ -188,3 +188,74 @@ fn no_uaf_with_sleeps() {
         }
     })
 }
+
+// make sure that calling `enable_rcu` multiple times works fine.
+// this shouldn't be done, but should behave nicely just in case.
+#[test]
+fn enable_rcu_multiple_calls() {
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        // call `enable_rcu` multiple times
+        .enable_rcu()
+        .enable_rcu()
+        .enable_rcu()
+        .build()
+        .unwrap();
+    rt.block_on(async move {
+        let state = Arc::new(Rcu::new(String::from("some interesting string")));
+        let reader = tokio::spawn({
+            let state = state.clone();
+            async move {
+                loop {
+                    let value = state.read();
+                    if *value == "done" {
+                        break;
+                    }
+                }
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let old_string = state.swap(String::from("done")).await;
+        assert_eq!(old_string, "some interesting string");
+        reader.await.unwrap();
+    });
+}
+
+// make sure that creating multiple runtimes which use `enable_rcu` still works fine.
+// this shouldn't be done, but should behave nicely just in case.
+#[test]
+fn enable_rcu_multiple_runtimes() {
+    let rt1 = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .enable_rcu()
+        .build()
+        .unwrap();
+
+    let rt2 = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .enable_rcu()
+        .build()
+        .unwrap();
+
+    let logic = || async move {
+        let state = Arc::new(Rcu::new(String::from("some interesting string")));
+        let reader = tokio::spawn({
+            let state = state.clone();
+            async move {
+                loop {
+                    let value = state.read();
+                    if *value == "done" {
+                        break;
+                    }
+                }
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let old_string = state.swap(String::from("done")).await;
+        assert_eq!(old_string, "some interesting string");
+        reader.await.unwrap();
+    };
+
+    rt1.block_on(logic());
+    rt2.block_on(logic());
+}

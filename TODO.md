@@ -25,6 +25,9 @@
   }
   ```
 
+- tests for reading and writing the rcu pointer outside of the tokio runtime. this should somehow be disallowed to prevent unsafety.
+
+- modify rcu guard so that you really can't hold it across await points. !Send and !Sync is not enough.
 
 - make MAX_CONCURRENT_THREADS more dynamic, for example calc it by using `num_cpu_cores()` or something like that, and allocate dynamic buffers instead of using fixed sized ones.
 this will help prevent wasted space on machines with a low number of cpu cores, and will help the code be more flexibly and run even on machines with thousands of cores (even though i'm not sure if there really are any such cores)
