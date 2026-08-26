@@ -1,3 +1,5 @@
+use std::sync::Once;
+
 use libc::{
     ENOSYS, MEMBARRIER_CMD_PRIVATE_EXPEDITED, MEMBARRIER_CMD_QUERY,
     MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, SYS_membarrier, c_int, syscall,
@@ -32,7 +34,10 @@ impl MemBarrierImpl for MemBarrierImplLinux {
     }
 
     fn register() {
-        membarrier_syscall_checked(MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0, 0);
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| {
+            membarrier_syscall_checked(MEMBARRIER_CMD_REGISTER_PRIVATE_EXPEDITED, 0, 0);
+        });
     }
 
     fn perform() {

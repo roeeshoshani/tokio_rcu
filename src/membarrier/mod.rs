@@ -30,8 +30,8 @@ pub fn is_supported() -> bool {
 ///
 /// must be called before performing any membarrier operation.
 ///
-/// can't be called more than once throughout the lifetime of the process.
-/// calling it more than once will result in unspecified behaviour.
+/// may be called more than once throughout the lifetime of the process.
+/// calling it more than once has no effect, only the first call actually performs the registration.
 pub fn register() {
     MemBarrierChosenImpl::register();
 }

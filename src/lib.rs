@@ -1,4 +1,7 @@
-use std::{cell::Cell, sync::atomic};
+use std::{
+    cell::Cell,
+    sync::atomic::{self, AtomicBool},
+};
 
 use crate::{
     epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
