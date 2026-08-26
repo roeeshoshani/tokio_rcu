@@ -1,3 +1,4 @@
+/// an implementation of the membarrier primitive for some platform.
 trait MemBarrierImpl {
     fn is_supported() -> bool;
     fn register();
@@ -26,12 +27,16 @@ pub fn is_supported() -> bool {
 }
 
 /// register the current process's intent to use membarriers.
-/// should be called once throughout the lifetime of the process, before performing any membarrier operation.
+///
+/// must be called before performing any membarrier operation.
+///
+/// can't be called more than once throughout the lifetime of the process.
+/// calling it more than once will result in unspecified behaviour.
 pub fn register() {
     MemBarrierChosenImpl::register();
 }
 
-/// perform a membarrier operation.
+/// perform a membarrier operation, synchronizing all threads in the current process.
 ///
 /// from `man membarrier`:
 /// Upon return from the system call, the calling thread has a guarantee that all its running thread siblings have passed
