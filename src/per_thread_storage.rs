@@ -1,3 +1,8 @@
+//! provides a per thread storage of some thread state needed for book-keeping.
+//!
+//! usually, for representing thread local state, [`thread_local!`] is used.
+//! but, for the thread state we need the ability to iterate over the thread local state value of all currently registered threads.
+//! this is not possible with [`thread_local!`], so we manually implement that mechanism.
 use std::{num::NonZeroU16, sync::atomic};
 
 use index_type::{IndexType, array::TypedArray};
