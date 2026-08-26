@@ -69,7 +69,6 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
         //
         // the only relevance of the previous value is for determining whether we are the leader of the overflow in case of overflow,
         // but that only requires atomicity, not any special ordering.
-        // TODO: do we really not need acquire ordering when we are not the leader? check the rest of the code.
         //
         // furthermore, note that due to this being a rmw operation, this does not break the existing release-sequence of this variable,
         // so anyone loading our specific store will still synchronize with all previous incrementors.
