@@ -37,6 +37,10 @@ static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::new();
 /// all incrementors of the epoch id lock it for reading before incrementing, and during the reset operation, the leader of the reset (the
 /// first one to increment the epoch id past its max threshold) locks this lock for writing, thus preventing any new incrementors from
 /// incrementing the epoch id.
+///
+/// this also ensures that we don't start performing a reset operation while some incrementor thread is still waiting for threads to see
+/// his incremented epoch id. if we were to start the reset while we was waiting, we would get stuck until the next overflow of the epoch
+/// id.
 static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
 /// when a thread increments the epoch id past its max threshold, this thread begins a reset operation.
@@ -70,8 +74,25 @@ async fn synchronize_rcu() {
     // thus, all such threads are guaranteed to see the new pointer, and we can thus ignore them when waiting for all existing
     // users.
 
+    // lock the reset sync lock for reading.
+    //
+    // this ensures that if any reset operation is currently ongoing, we don't interrupt it by incremented the epoch id while it
+    // is being reset, and we instead wait for it to finish and only then go on with our increment.
+    //
+    // this exclusivity is guaranteed since during reset the leader of the reset locks the reset sync lock for writing.
+    //
+    // this also ensures that a reset operation is not initiated while we are still waiting for threads to see our incremented epoch id,
+    // since we hold this until we finish waiting.
     let mut reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
 
+    // increment the epoch id.
+    //
+    // this is used as a communication primitive with the worker threads.
+    // worker threads will then update their last seen epoch id by reading the global epoch id every time they pass through a quiescent
+    // state.
+    //
+    // we can then sample their published last seen epoch id to know when they saw our increment, and once they did, we know that they
+    // passed through a quiescent state.
     let new_epoch_id = match epoch_id_inc() {
         Ok(v) => v,
         Err(err) => {
@@ -81,8 +102,10 @@ async fn synchronize_rcu() {
             if err.am_i_the_leader {
                 // re-lock the reset sync lock for writing.
                 //
-                // once we succeed grabbing the write lock, it is guaranteed that all current waiters have started listening to the reset
-                // finished notification, and all new waiters will be blocked until we finish.
+                // once we succeed grabbing the write lock, it is guaranteed that:
+                // - all previous waiters finished waiting for their grace period
+                // - all non-leader waiters that also entered reset mode have started listening to the reset
+                // - all new waiters will be blocked until we finish.
                 drop(reset_sync_read_guard);
                 let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write().await;
 
@@ -94,8 +117,9 @@ async fn synchronize_rcu() {
 
                 // wait for all threads to update their last seen epoch id to the reset value.
                 //
-                // note that parked and not yet started threads are not relevant here, since once they wake up they
-                // will see the updated reset value of the epoch id due to the membarrier.
+                // note that parked and not yet started threads are not relevant here, since once they wake up they will see the updated
+                // reset value of the epoch id due to the membarrier, and they will fetch and publish it along with the enabling of the
+                // busy flag as soon as they unpark.
                 wait_for_running_threads_to_see_epoch_id(|last_seen_epoch_id| {
                     last_seen_epoch_id == EPOCH_ID_MIN
                 })
@@ -150,6 +174,11 @@ async fn synchronize_rcu() {
         last_seen_epoch_id >= new_epoch_id
     })
     .await;
+
+    // ensure that the reset sync read guard is held up until this point.
+    // this is important to make sure that a reset operation is not initiated while we are still waiting for threads to see our new
+    // epoch id, otherwise we would keep waiting until the next overflow of the epoch id.
+    drop(reset_sync_read_guard);
 }
 
 /// wait for all threads to see some epoch id as implemented in the given predicate which processes the last seen epoch
@@ -277,13 +306,23 @@ fn on_thread_park() {
 fn on_thread_unpark() {
     let storage_slot = this_thread_get_storage_slot();
 
-    // mark this thread as busy.
-    storage_slot.state.fetch_or(
-        1,
-        // no special ordering needed here.
-        // note that this relaxed store doesn't break the release-sequence of this variable (see c++ memory model for more
-        // info), so it doesn't prevent the loader from synchronizing with any previous release ordered store.
-        atomic::Ordering::Relaxed,
+    // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
+    //
+    // this is needed for the case where a reset operation was performed since we last went to sleep.
+    // in that case, if we wake up and set the busy flag without updating the epoch id, some thread that had already incremented
+    // the epoch id since the reset may think that we saw his epoch id increment since we have a stale high epoch id value, even
+    // though in practice we didn't really see his epoch id increment.
+    let new_seen_epoch_id = this_thread_see_new_epoch_id();
+    storage_slot.state.store(
+        ThreadState {
+            last_seen_epoch_id: new_seen_epoch_id,
+            is_busy: true,
+        }
+        .encode(),
+        // we use release ordering to make sure that all writes to the data pointed at by the rcu protected pointer happen before this
+        // store so that no writes happen after the data is freed.
+        // this is needed since we actually fetch a new epoch id here, not only set the busy flag.
+        atomic::Ordering::Release,
     );
 }
 
@@ -318,8 +357,8 @@ fn on_after_task_poll() {
             is_busy: true,
         }
         .encode(),
-        // we use release ordering since we want to make sure that all writes to the data pointed at by the rcu protected pointer happen
-        // before this store so that no writes happen after the data is freed.
+        // we use release ordering to make sure that all writes to the data pointed at by the rcu protected pointer happen before this
+        // store so that no writes happen after the data is freed.
         atomic::Ordering::Release,
     );
 
