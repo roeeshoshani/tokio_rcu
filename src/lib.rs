@@ -184,6 +184,13 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
 }
 
 thread_local! {
+    /// a thread local variable which stores the slot id of the thread storage slot that was allocated for the current thread.
+    ///
+    /// initially, this is `None`.
+    ///
+    /// when a thread starts running, it allocates a storage slot for itself, and then saves the id of the allocated slot in this variable.
+    /// when the thread is running, it then uses this variable for determining which slot to use for book-keeping.
+    /// when the thread finishes executing, it then finally deallocates its storage slot and sets this back to `None`.
     static THREAD_STORAGE_SLOT: Cell<Option<ThreadStorageSlotId>> = Cell::new(None);
 }
 
@@ -308,6 +315,7 @@ fn on_after_task_poll() {
 
 pub trait TokioRuntimeBuilderExt {
     /// enable rcu support for this tokio runtime.
+    /// must be called when constructing the runtime in order to use any rcu related primitive inside the runtime.
     fn enable_rcu(&mut self) -> &mut Self;
 }
 
