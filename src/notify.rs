@@ -38,35 +38,45 @@ impl Notify {
 
         let _guard = self.lock.lock().unwrap();
 
-        // SAFETY: the lock guarantees exclusivity
-        let waiters_list_head = unsafe { &mut *self.waiters_list_head.get() };
+        // SAFETY: in the following code, we assume exclusivity over all data in the list due to the lock.
+        // also, we deliberately avoid creating any references to data inside the slots in the list, since when the futures containing
+        // these slots are polled, mutable references to them are created, and to avoid aliasing problems, we must avoid creating any
+        // reference to any slot related data.
+        unsafe {
+            let waiters_list_head = &mut *self.waiters_list_head.get();
 
-        // "take" the list and leave an empty list behind.
-        let mut cur_ptr_opt = std::mem::replace(waiters_list_head, None);
+            while let Some(cur_head) = *waiters_list_head {
+                let slot = cur_head.as_ptr();
 
-        while let Some(cur_ptr) = cur_ptr_opt {
-            let slot = cur_ptr.as_ptr();
+                // first remove the current slot from the list.
+                // we do this so that if its wake callback panics, we leave the list in a reasonable state.
 
-            // grab the next pointer in the list.
-            // SAFETY: we have the lock, so we are the only one accessing this.
-            // also, we don't create any references, so this is sound even if a mutable reference exists to the slot while we use it.
-            let next_ptr_opt = unsafe { *UnsafeCell::raw_get(&raw mut (*slot).next) };
+                // grab the next slot in the list.
+                let next_ptr_opt = *UnsafeCell::raw_get(&raw mut (*slot).next);
 
-            // tell the node that he is no longer in the list, sinc we cleared the list.
-            // SAFETY: we have the lock, so we are the only one accessing this.
-            // also, we don't create any references, so this is sound even if a mutable reference exists to the slot while we use it.
-            unsafe { *UnsafeCell::raw_get(&raw mut (*slot).is_in_list) = false };
+                // make the next slot the new head of the list, removing ourselves from it
+                *waiters_list_head = next_ptr_opt;
+                if let Some(next_ptr) = next_ptr_opt {
+                    let next_slot = next_ptr.as_ptr();
 
-            // SAFETY: we have the lock, so we are the only one accessing this.
-            // also, we don't create any references, so this is sound even if a mutable reference exists to the slot while we use it.
-            let waker_storage_ptr = unsafe { UnsafeCell::raw_get(&raw mut (*slot).waker) };
-            let waker_opt = unsafe { std::ptr::replace(waker_storage_ptr, None) };
-            if let Some(waker) = waker_opt {
-                // TODO: what if this panics? what will happen to the state of the list?
-                waker.wake();
+                    // set the pprev of the next slot to `None`, indicating to it that it is the first slot in the list.
+                    *UnsafeCell::raw_get(&raw mut (*next_slot).pprev) = None;
+                }
+
+                // tell the node that he is no longer in the list.
+                // this is important for when the future containing the slot is dropped, so that it knows whether to try to remove
+                // itself from the list or not.
+                *UnsafeCell::raw_get(&raw mut (*slot).is_in_list) = false;
+
+                let waker_storage_ptr = UnsafeCell::raw_get(&raw mut (*slot).waker);
+                let waker_opt = std::ptr::replace(waker_storage_ptr, None);
+                if let Some(waker) = waker_opt {
+                    // if this panics, nothing REALLY bad happens.
+                    // the list is currently in a valid state, and this node is no longer part of it.
+                    // but, the lock is poisoned, so whoever tries to lock it next will panic.
+                    waker.wake();
+                }
             }
-
-            cur_ptr_opt = next_ptr_opt;
         }
     }
 }
@@ -74,10 +84,16 @@ unsafe impl Send for Notify {}
 unsafe impl Sync for Notify {}
 
 type Next = Option<NonNull<Slot>>;
+
 struct Slot {
+    /// a pointer to the "next" field of the previous slot, or `None` if this slot is the head of the list.
     pprev: UnsafeCell<Option<NonNull<Next>>>,
+
+    /// a pointer to the next slot, or `None` if this is the last slot in the list.
     next: UnsafeCell<Next>,
+
     waker: UnsafeCell<Option<Waker>>,
+
     is_in_list: UnsafeCell<bool>,
 
     // this makes sure that the compiler doesn't emit the llvm `noalias` attribute for `&mut Self` values.
