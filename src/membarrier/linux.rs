@@ -7,10 +7,14 @@ use libc::{
 
 use crate::membarrier::MemBarrierImpl;
 
+/// runs the membarrier syscall with the given arguments.
 fn membarrier_syscall(cmd: c_int, flags: c_int, cpu_id: c_int) -> c_int {
     unsafe { syscall(SYS_membarrier, cmd, flags, cpu_id) as c_int }
 }
 
+/// runs the membarrier syscall with the given arguments, and checks that the syscall returned 0, which usually indicates success.
+/// note that not all commands use 0 to indicate success (but most commands do).
+/// so only use for commands that do use 0 to indicate success.
 fn membarrier_syscall_checked(cmd: c_int, flags: c_int, cpu_id: c_int) {
     assert_eq!(membarrier_syscall(cmd, flags, cpu_id), 0);
 }
