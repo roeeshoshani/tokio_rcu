@@ -7,8 +7,19 @@ use crate::{
     thread_state::{EncodedThreadState, ThreadState},
 };
 
+/// the maximum number of concurrent tokio worker threads.
+///
+/// using a large value increases the memory usage.
+///
+/// using a small value limits the number of worker threads that can be used.
+/// on machines with many cpu cores, this may actually be a problem.
+///
+/// we try to use a sweet spot value to allow this to run on a wide variety of machines while not wasting too much memory.
+///
+// TODO: make this dynamic somehow.
 const MAX_CONCURRENT_THREADS: usize = 4096;
 
+/// the id of a slot in the thread storage slots array.
 #[derive(IndexType, Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
 pub struct ThreadStorageSlotId(
     // we use a nonzero integer here since we often store `Option<Self>` values, and using a nonzero integer
@@ -16,11 +27,16 @@ pub struct ThreadStorageSlotId(
     pub NonZeroU16,
 );
 
+/// the value of a single storage slot in the storage slots array.
 #[derive(Debug)]
 pub struct ThreadStorageSlotValue {
+    /// the encoded state of the thread who owns this slot.
     pub state: Atomic<EncodedThreadState>,
 }
 
+/// the actual storage slots.
+/// each thread allocates a slot by finding an empty one and acquiring it.
+/// all slots are initially empty.
 static THREAD_STORAGE_SLOTS: TypedArray<
     ThreadStorageSlotId,
     ThreadStorageSlotValue,
@@ -33,17 +49,28 @@ static THREAD_STORAGE_SLOTS: TypedArray<
     }; MAX_CONCURRENT_THREADS],
 );
 
+/// returns all storage slots for iterating over the state of all existing threads.
 pub fn thread_storage_slot_get_all() -> &'static [ThreadStorageSlotValue] {
     THREAD_STORAGE_SLOTS.as_slice().as_slice()
 }
 
+/// returns the storage slot with the provided id.
 pub fn thread_storage_slot_get(id: ThreadStorageSlotId) -> &'static ThreadStorageSlotValue {
     &THREAD_STORAGE_SLOTS[id]
 }
 
-fn thread_storage_slot_alloc_one_try(
-    encoded_initial_thread_state: EncodedThreadState,
-) -> Option<ThreadStorageSlotId> {
+/// allocates a thread storage slot, and once allocated, the slot is initialized to the provided initial state.
+///
+/// the selected slot's transition from being vacant to being vacant immediately sets its state to the provided state.
+/// there is not "allocated but uninitialized" state. as soon as the slot is allocated, it is also initialized to the given initial state.
+///
+/// if the storage is full and all slots are occupied, this function returns `None`.
+///
+/// if a slot is allocated and `Some(_)` is returned, this function provides acquire ordering in relation to the free operation of all
+/// previous users of this slot.
+pub fn thread_storage_slot_alloc(initial_thread_state: ThreadState) -> Option<ThreadStorageSlotId> {
+    let encoded_initial_thread_state = initial_thread_state.encode();
+
     for (slot_id, slot) in THREAD_STORAGE_SLOTS.iter_enumerated() {
         // we first perform a load, and only if the load shows that the slot is empty, we try a compare exchange.
         // we could just perform a compare exchange directly without the extra load, but that would be slower.
@@ -85,22 +112,9 @@ fn thread_storage_slot_alloc_one_try(
     None
 }
 
-pub fn thread_storage_slot_alloc(initial_thread_state: ThreadState) -> Option<ThreadStorageSlotId> {
-    const MAX_ATTEMPTS: usize = 16;
-
-    let encoded_initial_thread_state = initial_thread_state.encode();
-
-    for _ in 0..MAX_ATTEMPTS {
-        if let Some(allocated_slot_id) =
-            thread_storage_slot_alloc_one_try(encoded_initial_thread_state)
-        {
-            return Some(allocated_slot_id);
-        }
-    }
-
-    None
-}
-
+/// frees the storage slot with the given id.
+/// must only be called on an id previously allocated using [`thread_storage_slot_alloc`].
+/// the deallocation of the slot provides release memory ordering in relation to all future acquirers of this slot.
 pub fn thread_storage_slot_free(id: ThreadStorageSlotId) {
     THREAD_STORAGE_SLOTS[id].state.store(
         ThreadState::NONE_ENCODED_VALUE,
