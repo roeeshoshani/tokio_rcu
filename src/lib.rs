@@ -197,6 +197,17 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         //
         // so, we start listening before checking the values, so that even notifications that are issued while
         // or right after we finished checking are still received.
+        //
+        // note that this registration operation provides acquire ordering against any previous notifiers, so we won't miss
+        // any state updates.
+        // to prove this, we can split our situation with the readers into 2 cases:
+        // 1. a thread already notified before we registered.
+        // 2. a thread hasn't already notified when we registered.
+        // in case 1, we are guaranteed to see this thread's state update since the notify operation has release ordering, and paired
+        // with the acquire ordering of our registration, it guarantees that we see the state update as happened before the notify
+        // operation.
+        // in case 2, we are guaranteed to at some point see either the state update or the notification, since the notification
+        // hasn't yet been observed by us.
         let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
 
         // check if all threads have seen our new epoch id
@@ -210,14 +221,15 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
             );
 
             let Some(state) = ThreadState::decode(encoded_state) else {
-                // if the slot is empty, ignore it
+                // if the slot is empty, ignore it.
+                // it may at some point be allocated by some new thread that just started, but in this function we explicitly ignore
+                // new threads.
                 return true;
             };
 
             if !state.is_busy {
-                // this thread is currently not busy running any future, so it is not relevant.
-                // as previously explained, even if it start running right after we check this, it is guaranteed to see
-                // the new pointer and is thus not relevant to us.
+                // this thread is currently not busy running any future.
+                // it may start running as soon as we finished checking it, but in this function we explicitly ignore non busy threads.
                 return true;
             }
 
@@ -228,7 +240,7 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         }
 
         // some of the threads haven't yet seen our new epoch id.
-        // so, wait for them to go through a quiescent state and see our new epoch id.
+        // so, wait for them to go through a quiescent state and see our new epoch id, or to go to sleep.
         notified.await;
     }
 }

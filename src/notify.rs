@@ -30,8 +30,8 @@ impl Notify {
     /// any notification received after this function returns, even if it wasn't `poll`ed or `await`ed yet, will be received by the
     /// returned future, and once `poll`ed it will complete immediately.
     ///
-    /// the registeration operation performed by this function provides acquire memory ordering, ensuring that all operations performed
-    /// after this function returns are ordered after the registeration operation.
+    /// the registeration operation performed by this function provides acquire memory ordering against all previous notifiers of this
+    /// notify data structure.
     ///
     /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you,
     /// and all previous notifiers who notified before him.
