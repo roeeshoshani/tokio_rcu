@@ -192,8 +192,8 @@ pub async fn synchronize_rcu() {
     drop(reset_sync_read_guard);
 }
 
-/// wait for all threads to see some epoch id as implemented in the given predicate which processes the last seen epoch
-/// id of each thread.
+/// wait for all other threads in the process other than the current thread to see some epoch id as implemented in the given predicate
+/// which processes the last seen epoch id of each thread.
 ///
 /// this function does not take into account new threads just starting, nor new threads just existing the busy state.
 async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
@@ -224,8 +224,19 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         // is very small, so we shouldn't expect overflow to occur here.
         let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
 
+        // we must re-calculate this every iteration since our task may be sent between threads every time we await the notified future.
+        let this_thread_storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
+
         // check if all threads have seen our new epoch id
-        if thread_storage_slot_get_all().iter().all(|storage_slot| {
+        if thread_storage_slot_get_all().all(|(storage_slot_id, storage_slot)| {
+            if storage_slot_id == this_thread_storage_slot_id {
+                // this slot represents the current thread. no need to wait for ourselves.
+                //
+                // note that if we didn't do this, then our synchronize rcu implementation would always block at least once, due
+                // to having to yield at least once to let the current thread pass through a quiescent state.
+                // this would be very wasteful and unnecessarily slow.
+                return true;
+            }
             let encoded_state = storage_slot.state.load(
                 // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
                 // pointed at by the rcu protected pointer happen before we see the store to the state.

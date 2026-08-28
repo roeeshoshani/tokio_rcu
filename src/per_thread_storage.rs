@@ -55,8 +55,9 @@ static THREAD_STORAGE_SLOTS: TypedArray<
 );
 
 /// returns all storage slots for iterating over the state of all existing threads.
-pub fn thread_storage_slot_get_all() -> &'static [ThreadStorageSlotValue] {
-    THREAD_STORAGE_SLOTS.as_slice().as_slice()
+pub fn thread_storage_slot_get_all()
+-> impl Iterator<Item = (ThreadStorageSlotId, &'static ThreadStorageSlotValue)> {
+    THREAD_STORAGE_SLOTS.iter_enumerated()
 }
 
 /// returns the storage slot with the provided id.
