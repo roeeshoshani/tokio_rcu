@@ -21,16 +21,80 @@ impl<'a, T> Deref for RcuReadGuard<'a, T> {
     }
 }
 
+/// old data of an rcu protected pointer, returned after the pointer was swapped to a new one.
+///
+/// **this type must not be dropped**, you must call [`wait`](RcuOldData::wait) on it.
+/// that's because the data can't be freed until we know that all previous readers of this pointer finished using it.
+/// dropping this type without waiting means that old readers may still be using the pointer, so the data can't be freed.
+/// so, dropping this type without waiting for it leaks the pointer and panics.
+pub struct RcuOldData<T> {
+    /// the old data pointer, but make it `Send` and `Sync`.
+    /// this is safe since this field is basically just a pointer to a heap allocation, and can thus safely be sent and shared between
+    /// threads.
+    old_data_ptr: PtrMutSendSync<T>,
+}
+impl<T> RcuOldData<T> {
+    /// creates a new old data pointer guard.
+    ///
+    /// # safety
+    ///
+    /// the provided pointer must be the old data pointer of an rcu protected pointer, and must have already been swapped by a new
+    /// pointer.
+    unsafe fn new(old_data_ptr: *mut T) -> Self {
+        Self {
+            old_data_ptr: unsafe {
+                // SAFETY: the old data pointer is basically just a pointer to a heap allocation, and can thus safely be sent and shared between
+                // threads.
+                PtrMutSendSync::new(old_data_ptr)
+            },
+        }
+    }
+    /// wait for all potential existing users of this old pointer to finish using it, and then returned an owned version of the pointer
+    /// once it is guaranteed to no longer be in use by anyone else.
+    ///
+    /// # cancellation safety
+    ///
+    /// function is not cancellation safe. if cancelled, it will leak the pointer and panic.
+    pub async fn wait(self) -> Box<T> {
+        // wait for all previous readers to stop using the old value
+        synchronize_rcu().await;
+
+        // SAFETY: all existing readers finished using this pointers, so it is now exclusively ours.
+        // also, pointers are always valid pointers to valid data by the invariants of the `Rcu` type.
+        let res = unsafe { Box::from_raw(self.old_data_ptr.ptr()) };
+
+        // this type is not allowed to be dropped, so avoid running its panicking destructor.
+        // we are finished doing all cleanup at this point anyway.
+        std::mem::forget(self);
+
+        res
+    }
+}
+impl<T> Drop for RcuOldData<T> {
+    #[track_caller]
+    #[inline]
+    fn drop(&mut self) {
+        panic!(
+            "{} can't be dropped since concurrent readers may be using it. it must first be waited for.",
+            std::any::type_name::<Self>()
+        );
+    }
+}
+
+/// an rcu protected pointer.
 pub struct Rcu<T> {
     value_ptr: AtomicPtr<T>,
 }
 impl<T> Rcu<T> {
-    pub fn new(value: T) -> Self {
+    /// creates a new rcu protected pointer pointing to the given data.
+    pub fn new(value: Box<T>) -> Self {
         Self {
-            value_ptr: AtomicPtr::new(Box::leak(Box::new(value))),
+            value_ptr: AtomicPtr::new(Box::leak(value)),
         }
     }
 
+    /// reads the rcu protected pointer, returning a read guard to the data it currently points to.
+    // TODO: explain the limitations of this guard.
     pub fn read(&self) -> RcuReadGuard<'_, T> {
         let ptr = self.value_ptr.load(
             // we want acquire ordering to make sure that the write to the pointed-at data happens before the
@@ -46,8 +110,10 @@ impl<T> Rcu<T> {
         }
     }
 
-    pub async fn swap(&self, new_value: T) -> T {
-        let new_value_ptr = Box::leak(Box::new(new_value));
+    /// swaps the current value to the new value, and returns a guard containing the old value, which can be owned after waiting
+    /// for all previous users of that pointer to finish using it.
+    pub fn swap_nowait(&self, new_value: Box<T>) -> RcuOldData<T> {
+        let new_value_ptr = Box::leak(new_value);
 
         let old_value_ptr = self.value_ptr.swap(
             new_value_ptr,
@@ -62,20 +128,18 @@ impl<T> Rcu<T> {
             atomic::Ordering::AcqRel,
         );
 
-        // make the pointer `Send` and `Sync` if the `T` is `Send` and `Sync` so that we can hold it across await points without
-        // limiting the future to being non send or non sync.
-        //
-        // SAFETY: the pointer is just a pointer to a heap allocated object, which we will fully own once the synchronize rcu
-        // call finishes.
-        let old_value_ptr = unsafe { PtrMutSendSync::new(old_value_ptr) };
+        // SAFETY: we provide the old pointer after swapping it with a new one.
+        unsafe { RcuOldData::new(old_value_ptr) }
+    }
 
-        // wait for all previous readers to stop using the old value
-        synchronize_rcu().await;
-
-        // SAFETY: pointers are always valid by the invariants of this type.
-        let boxed_value = unsafe { Box::from_raw(old_value_ptr.ptr()) };
-
-        *boxed_value
+    /// swaps the current value to the new value, waits for all previous users of the old value to finish using it, and returns an
+    /// owned version of the old value.
+    ///
+    /// # cancellation safety
+    ///
+    /// function is not cancellation safe. if cancelled, it will leak the old pointer and panic.
+    pub async fn swap(&self, new_value: Box<T>) -> Box<T> {
+        self.swap_nowait(new_value).wait().await
     }
 }
 impl<T> Drop for Rcu<T> {

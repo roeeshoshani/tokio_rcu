@@ -12,7 +12,7 @@ fn main() {
     rt.block_on(async {
         let orig_string = "Hello, world!\n";
         let final_string = "It works final!\n";
-        let data = Arc::new(Rcu::new(String::from(orig_string)));
+        let data = Arc::new(Rcu::new(Box::new(String::from(orig_string))));
         let reader_tasks: Vec<_> = (0..200)
             .map(|_| {
                 tokio::spawn({
@@ -48,7 +48,7 @@ fn main() {
                     async move {
                         for i in 0..10_000 {
                             let new_string = format!("It works {} {}!\n", worker_id, i);
-                            data.swap(new_string).await;
+                            data.swap(Box::new(new_string)).await;
                             tokio::task::yield_now().await;
                         }
                     }
@@ -60,7 +60,7 @@ fn main() {
             task.await.unwrap();
         }
 
-        let old_string = data.swap(String::from(final_string)).await;
+        let old_string = data.swap(Box::new(String::from(final_string))).await;
 
         for task in reader_tasks {
             task.await.unwrap();

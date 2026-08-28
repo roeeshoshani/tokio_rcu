@@ -1,27 +1,4 @@
-- provide a more raw interface in the `Rcu` wrapper, where for `new` and `swap` you provide a `Box<T>` instead of a `T`, and `swap` returns an undroppable guard which you must await and it then yields you a `Box<T>` representing the previous value. this will then allow you for example to implement double buffering using `Rcu` and using only 2 allocations that are continously being re-used.
-  for implementing an undroppable type, here's what i found online:
-  ```rust
-  /// A type that cannot be dropped.
-  pub struct Undroppable<T: ?Sized>(mem::ManuallyDrop<T>);
-  
-  impl<T> Undroppable<T> {
-      // Makes `val` undroppable.
-      //
-      // If `val` has a  non-trivial destructor, attempting
-      // to drop it will result in a compilation error.
-      pub fn new_unchecked(val: T) -> Self {
-          Self(mem::ManuallyDrop::new(val))
-      }
-  }
-  
-  impl<T:? Sized> Drop for Undroppable<T> {
-      fn drop(&mut self) {
-          const {
-              assert!(!mem::needs_drop::<T>(), "This cannot be dropped.");
-          }
-      }
-  }
-  ```
+- in synchronize_rcu, don't make the current thread check itself. this is annoying since it means that a thread must always sleep at least once before completing the synchronize_rcu call.
 
 - tests for reading and writing the rcu pointer outside of the tokio runtime. this should somehow be disallowed to prevent unsafety.
 

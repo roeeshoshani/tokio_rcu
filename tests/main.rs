@@ -20,7 +20,7 @@ fn no_uaf_during_stress() {
         let initial_string = "<VALID> initial string";
         let final_string = "<VALID> final string";
 
-        let data = Arc::new(Rcu::new(String::from(initial_string)));
+        let data = Arc::new(Rcu::new(Box::new(String::from(initial_string))));
         let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
             .map(|_| {
                 tokio::spawn({
@@ -65,7 +65,7 @@ fn no_uaf_during_stress() {
                         for i in 0..WRITER_NUM_WRITES {
                             let new_string =
                                 format!("<VALID> hello from worker {} {}", writer_id, i);
-                            let old_str = data.swap(new_string).await;
+                            let old_str = data.swap(Box::new(new_string)).await;
 
                             // overwrite the memory of the old string with some invalid data, so that if any reader happens
                             // to read it, he will detect that it is invalid and fail the test.
@@ -83,7 +83,7 @@ fn no_uaf_during_stress() {
             task.await.unwrap();
         }
 
-        let _ = data.swap(String::from(final_string)).await;
+        let _ = data.swap(Box::new(String::from(final_string))).await;
 
         for task in reader_tasks {
             task.await.unwrap();
@@ -118,7 +118,7 @@ fn no_uaf_with_sleeps() {
         let initial_string = "<VALID> initial string";
         let final_string = "<VALID> final string";
 
-        let data = Arc::new(Rcu::new(String::from(initial_string)));
+        let data = Arc::new(Rcu::new(Box::new(String::from(initial_string))));
         let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
             .map(|_| {
                 tokio::spawn({
@@ -163,7 +163,7 @@ fn no_uaf_with_sleeps() {
                         for i in 0..WRITER_NUM_WRITES {
                             let new_string =
                                 format!("<VALID> hello from worker {} {}", writer_id, i);
-                            let old_str = data.swap(new_string).await;
+                            let old_str = data.swap(Box::new(new_string)).await;
 
                             // overwrite the memory of the old string with some invalid data, so that if any reader happens
                             // to read it, he will detect that it is invalid and fail the test.
@@ -181,7 +181,7 @@ fn no_uaf_with_sleeps() {
             task.await.unwrap();
         }
 
-        let _ = data.swap(String::from(final_string)).await;
+        let _ = data.swap(Box::new(String::from(final_string))).await;
 
         for task in reader_tasks {
             task.await.unwrap();
@@ -202,7 +202,7 @@ fn enable_rcu_multiple_calls() {
         .build()
         .unwrap();
     rt.block_on(async move {
-        let state = Arc::new(Rcu::new(String::from("some interesting string")));
+        let state = Arc::new(Rcu::new(Box::new(String::from("some interesting string"))));
         let reader = tokio::spawn({
             let state = state.clone();
             async move {
@@ -215,8 +215,8 @@ fn enable_rcu_multiple_calls() {
             }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let old_string = state.swap(String::from("done")).await;
-        assert_eq!(old_string, "some interesting string");
+        let old_string = state.swap(Box::new(String::from("done"))).await;
+        assert_eq!(*old_string, "some interesting string");
         reader.await.unwrap();
     });
 }
@@ -238,7 +238,7 @@ fn enable_rcu_multiple_runtimes() {
         .unwrap();
 
     let logic = || async move {
-        let state = Arc::new(Rcu::new(String::from("some interesting string")));
+        let state = Arc::new(Rcu::new(Box::new(String::from("some interesting string"))));
         let reader = tokio::spawn({
             let state = state.clone();
             async move {
@@ -251,8 +251,8 @@ fn enable_rcu_multiple_runtimes() {
             }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let old_string = state.swap(String::from("done")).await;
-        assert_eq!(old_string, "some interesting string");
+        let old_string = state.swap(Box::new(String::from("done"))).await;
+        assert_eq!(*old_string, "some interesting string");
         reader.await.unwrap();
     };
 
