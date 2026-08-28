@@ -330,14 +330,14 @@ fn double_buffering() {
             })
             .collect();
 
-        let mut cur_free_buf = buf_b;
+        let mut cur_unused_buf = buf_b;
         for i in 0..WRITER_NUM_WRITES {
-            cur_free_buf.bytes.fill(i as u8);
-            cur_free_buf = data.swap(cur_free_buf).await;
+            cur_unused_buf.bytes.fill(i as u8);
+            cur_unused_buf = data.swap(cur_unused_buf).await;
         }
 
-        cur_free_buf.should_readers_exit = true;
-        data.swap(cur_free_buf).await;
+        cur_unused_buf.should_readers_exit = true;
+        data.swap(cur_unused_buf).await;
 
         for task in reader_tasks {
             task.await.unwrap();
