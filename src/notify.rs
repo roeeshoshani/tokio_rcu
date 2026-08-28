@@ -137,6 +137,7 @@ pub struct Notified<'a> {
     slot: Slot,
     num_wakeups_snapshot: usize,
     notify: &'a Notify,
+    was_registered_into_list: bool,
 }
 impl<'a> Notified<'a> {
     fn new(notify: &'a Notify) -> Self {
@@ -149,13 +150,14 @@ impl<'a> Notified<'a> {
                 atomic::Ordering::Acquire,
             ),
             notify,
+            was_registered_into_list: false,
         }
     }
 }
 impl<'a> Future for Notified<'a> {
     type Output = ();
 
-    fn poll(self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+    fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         let new_num_wakeups = self.notify.num_wakeups.load(
             // no ordering here, we instead use a fence only when an ordering is really needed
             atomic::Ordering::Relaxed,
@@ -193,22 +195,35 @@ impl<'a> Future for Notified<'a> {
                         }
                     }
                     false => {
-                        // put ourselves inside the list
+                        // we are currently not in the list
 
-                        *self.slot.waker.get() = Some(cx.waker().clone());
-                        *self.slot.is_in_list.get() = true;
+                        if self.was_registered_into_list {
+                            // if we had registed ourselves into the list in a previous call to `poll`, and we are now no longer
+                            // in the list, it means that someone woke us up. so, we're done.
+                            return Poll::Ready(());
+                        } else {
+                            // first time being polled, register ourselves into the list
+                            *self.slot.waker.get() = Some(cx.waker().clone());
+                            *self.slot.is_in_list.get() = true;
 
-                        let head_opt = *self.notify.waiters_list_head.get();
-                        *self.slot.next.get() = head_opt;
-                        *self.slot.pprev.get() = None;
+                            let head_opt = *self.notify.waiters_list_head.get();
+                            *self.slot.next.get() = head_opt;
+                            *self.slot.pprev.get() = None;
 
-                        if let Some(head_nonnull) = head_opt {
-                            let head = head_nonnull.as_ptr();
-                            let head_pprev = UnsafeCell::raw_get(&raw mut (*head).pprev);
-                            *head_pprev = Some(NonNull::new_unchecked(self.slot.next.get()))
+                            if let Some(head_nonnull) = head_opt {
+                                let head = head_nonnull.as_ptr();
+                                let head_pprev = UnsafeCell::raw_get(&raw mut (*head).pprev);
+                                *head_pprev = Some(NonNull::new_unchecked(self.slot.next.get()))
+                            }
+
+                            *self.notify.waiters_list_head.get() =
+                                Some(NonNull::from_ref(&self.slot));
+
+                            // mark that we have registered ourselves into the list.
+                            // this is later used to detect if we got removed from the list after registration, in which case someone
+                            // woke us up.
+                            self.as_mut().get_unchecked_mut().was_registered_into_list = true;
                         }
-
-                        *self.notify.waiters_list_head.get() = Some(NonNull::from_ref(&self.slot))
                     }
                 }
             }
@@ -240,6 +255,11 @@ unsafe impl<'a> Sync for Notified<'a> {}
 
 impl<'a> Drop for Notified<'a> {
     fn drop(&mut self) {
+        // if we weren't registered into the list, no cleanup is needed.
+        if !self.was_registered_into_list {
+            return;
+        }
+
         let _guard = self.notify.lock.lock().unwrap();
 
         // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
