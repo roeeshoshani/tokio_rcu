@@ -138,6 +138,9 @@ async fn synchronize_rcu() {
                 //
                 // this must be done before dropping the read lock, so that the leader doesn't start acting before we are listening
                 // to notifications from him.
+                //
+                // as for the overflow behaviour of `notified`, the time window where we hold the returned future before awaiting it
+                // is very small, so we shouldn't expect overflow to occur here.
                 let event = RESET_FINISHED_NOTIFICATION.notified();
 
                 // let the leader start doing its thing.
@@ -208,6 +211,9 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         // operation.
         // in case 2, we are guaranteed to at some point see either the state update or the notification, since the notification
         // hasn't yet been observed by us.
+        //
+        // as for the overflow behaviour of `notified`, the time window where we hold the returned future before awaiting it
+        // is very small, so we shouldn't expect overflow to occur here.
         let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
 
         // check if all threads have seen our new epoch id
