@@ -35,6 +35,15 @@ impl Notify {
     ///
     /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you,
     /// and all previous notifiers who notified before him.
+    ///
+    /// # overflow
+    ///
+    /// note that if after the registration and before the first poll of the returned future, `usize::MAX + 1` calls to `notify` are
+    /// performed, all of those wakeups would be missed, and awaiting the returned future will block, even though the `notify` calls
+    /// should have woke the returned future up, since it was already registered when those calls were made.
+    ///
+    /// this is a known limitation of the current implementation, and when using this type, you should be aware of it, and make sure
+    /// that your code works properly even in such extreme edge cases.
     pub fn notified(&self) -> Notified<'_> {
         Notified::new(self)
     }
