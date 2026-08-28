@@ -55,8 +55,16 @@ static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 
 /// wait for an RCU grace period.
-// TODO: make this public and describe the memory ordering guarantees in more detail.
-async fn synchronize_rcu() {
+///
+/// this function first performs a membarrier to synchronize all previous writes performed by the current thread with all other
+/// threads in the process.
+///
+/// after performing the membarrier, this function waits for every thread that was active during the membarrier operation to pass
+/// through a quiescent state or to became unactive.
+///
+/// a quiescent state of a thread is defined as a state where the thread is not executing any user-defined task, and is instead executing
+/// code inside tokio's task scheduling logic.
+pub async fn synchronize_rcu() {
     // perform a membarrier to make sure that all other threads see the new rcu pointer.
     membarrier::perform();
 
