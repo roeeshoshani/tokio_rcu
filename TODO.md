@@ -1,5 +1,3 @@
-- currently, even if i set the epoch id to u8, i can't seem to overflow it. why? is there a bug in my code?
-
 - provide a more raw interface in the `Rcu` wrapper, where for `new` and `swap` you provide a `Box<T>` instead of a `T`, and `swap` returns an undroppable guard which you must await and it then yields you a `Box<T>` representing the previous value. this will then allow you for example to implement double buffering using `Rcu` and using only 2 allocations that are continously being re-used.
   for implementing an undroppable type, here's what i found online:
   ```rust
