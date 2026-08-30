@@ -3,7 +3,7 @@
 //! usually, for representing thread local state, [`thread_local!`] is used.
 //! but, for the thread state we need the ability to iterate over the thread local state value of all currently registered threads.
 //! this is not possible with [`thread_local!`], so we manually implement that mechanism.
-use std::{num::NonZeroU16, sync::atomic};
+use std::{cell::Cell, num::NonZeroU16, sync::atomic};
 
 use index_type::{IndexType, array::TypedArray};
 
@@ -129,4 +129,79 @@ pub fn thread_storage_slot_free(id: ThreadStorageSlotId) {
         // coupled with an acquire load when allocating the slot.
         atomic::Ordering::Release,
     );
+}
+
+/// an owned thread storage slot, intended to be used as a thread local variable.
+///
+/// this represents an optional owned storage slot, initially it starts empty, and you can then allocate and deallocate it.
+///
+/// this type has a proper drop impl which frees the slot, in case the thread unexpectedly exits without manually deallocating the slot.
+pub struct OwnedThreadStorageSlot {
+    id: Cell<Option<ThreadStorageSlotId>>,
+}
+impl OwnedThreadStorageSlot {
+    /// creates a new unallocated instance not associated with any actual slot.
+    /// to allocate a slot, call the [`allocate`](Self::alloc) function.
+    pub const fn unallocated() -> Self {
+        Self {
+            id: Cell::new(None),
+        }
+    }
+
+    /// allocates a new slot for the current thread, if one is not already allocated.
+    /// if a slot is already allocated, this function does nothing.
+    pub fn alloc(&self, initial_thread_state: ThreadState) {
+        if self.id.get().is_none() {
+            return;
+        }
+        let id = thread_storage_slot_alloc(initial_thread_state).expect(
+            "too many concurrent threads, failed to allocate a storage slot for a new thread",
+        );
+        self.id.set(Some(id));
+    }
+
+    /// deallocates the current slot, if any.
+    /// if no slot is currently allocated, this function does nothing.
+    pub fn dealloc(&self) {
+        let Some(id) = self.id.get() else { return };
+        thread_storage_slot_free(id);
+        self.id.set(None);
+    }
+
+    /// returns the id of the current slot, if any.
+    pub fn id(&self) -> Option<ThreadStorageSlotId> {
+        self.id.get()
+    }
+}
+impl Drop for OwnedThreadStorageSlot {
+    fn drop(&mut self) {
+        self.dealloc();
+    }
+}
+
+thread_local! {
+    /// a thread local variable which represents the storage slot currently owned by the current thread.
+    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = OwnedThreadStorageSlot::unallocated();
+}
+
+/// returns the storage slot id of the current thread, assuming that a storage slot was already allocated for the current
+/// thread.
+pub fn this_thread_get_storage_slot_id() -> ThreadStorageSlotId {
+    THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.id().unwrap())
+}
+
+/// returns the storage slot of the current thread, assuming that a storage slot was already allocated for the current
+/// thread.
+pub fn this_thread_get_storage_slot() -> &'static ThreadStorageSlotValue {
+    THREAD_STORAGE_SLOT.with(|storage_slot| thread_storage_slot_get(storage_slot.id().unwrap()))
+}
+
+/// allocates a storage slot for the current thread, if one is not already allocated.
+pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) {
+    THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.alloc(initial_thread_state))
+}
+
+/// deallocates the storage slot owned by the current thread, if any.
+pub fn this_thread_dealloc_storage_slot() {
+    THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.dealloc())
 }

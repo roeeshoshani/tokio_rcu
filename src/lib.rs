@@ -4,7 +4,9 @@ use crate::{
     epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
     notify::Notify,
     per_thread_storage::{
-        ThreadStorageSlotId, ThreadStorageSlotValue, thread_storage_slot_alloc,
+        OwnedThreadStorageSlot, ThreadStorageSlotId, ThreadStorageSlotValue,
+        this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
+        this_thread_get_storage_slot, this_thread_get_storage_slot_id, thread_storage_slot_alloc,
         thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
@@ -225,7 +227,7 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
 
         // we must re-calculate this every iteration since our task may be sent between threads every time we await the notified future.
-        let this_thread_storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
+        let this_thread_storage_slot_id = this_thread_get_storage_slot_id();
 
         // check if all threads have seen our new epoch id
         if thread_storage_slot_get_all().all(|(storage_slot_id, storage_slot)| {
@@ -270,24 +272,6 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     }
 }
 
-thread_local! {
-    /// a thread local variable which stores the slot id of the thread storage slot that was allocated for the current thread.
-    ///
-    /// initially, this is `None`.
-    ///
-    /// when a thread starts running, it allocates a storage slot for itself, and then saves the id of the allocated slot in this variable.
-    /// when the thread is running, it then uses this variable for determining which slot to use for book-keeping.
-    /// when the thread finishes executing, it then finally deallocates its storage slot and sets this back to `None`.
-    static THREAD_STORAGE_SLOT: Cell<Option<ThreadStorageSlotId>> = Cell::new(None);
-}
-
-/// returns the storage slot of the current thread, assuming that a storage slot was already allocated for the current
-/// thread.
-fn this_thread_get_storage_slot() -> &'static ThreadStorageSlotValue {
-    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
-    thread_storage_slot_get(storage_slot_id)
-}
-
 /// "see" a new epoch id in the current thread.
 /// this fetches the current epoch id with a proper memory ordering - a release memory ordering, which provides the required
 /// guaranteed, for example it guarantees that once we see an updated epoch id, we see the swap of the rcu protected pointer
@@ -306,19 +290,14 @@ fn this_thread_see_new_epoch_id() -> EpochId {
 
 fn on_thread_start() {
     let epoch_id = this_thread_see_new_epoch_id();
-    let storage_slot = thread_storage_slot_alloc(ThreadState {
+    this_thread_alloc_storage_slot(ThreadState {
         last_seen_epoch_id: epoch_id,
         is_busy: true,
-    })
-    .expect("too many concurrent threads, failed to allocate a storage slot for a new thread");
-
-    THREAD_STORAGE_SLOT.set(Some(storage_slot));
+    });
 }
 
 fn on_thread_stop() {
-    let storage_slot_id = THREAD_STORAGE_SLOT.get().unwrap();
-    thread_storage_slot_free(storage_slot_id);
-    THREAD_STORAGE_SLOT.set(None);
+    this_thread_dealloc_storage_slot();
 }
 
 fn on_thread_park() {
