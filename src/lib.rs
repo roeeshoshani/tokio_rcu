@@ -1,13 +1,11 @@
-use std::{cell::Cell, sync::atomic};
+use std::{sync::atomic, task::Poll};
 
 use crate::{
     epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
     notify::Notify,
     per_thread_storage::{
-        OwnedThreadStorageSlot, ThreadStorageSlotId, ThreadStorageSlotValue,
         this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
-        this_thread_get_storage_slot, this_thread_get_storage_slot_id, thread_storage_slot_alloc,
-        thread_storage_slot_free, thread_storage_slot_get, thread_storage_slot_get_all,
+        this_thread_get_storage_slot, this_thread_get_storage_slot_id, thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
 };
@@ -22,6 +20,7 @@ mod thread_state;
 mod utils;
 
 pub use rcu::{Rcu, RcuReadGuard};
+use tokio::runtime::RuntimeFlavor;
 
 /// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful
 /// way (e.g. become non-busy). used by waiters to wait for notifications in a blocking manner while waiting for threads to see
@@ -389,14 +388,20 @@ fn on_after_task_poll() {
     }
 }
 
+/// extension methods for tokio's runtime builder.
 pub trait TokioRuntimeBuilderExt {
     /// enable rcu support for this tokio runtime.
     /// must be called when constructing the runtime in order to use any rcu related primitive inside the runtime.
-    fn enable_rcu(&mut self) -> &mut Self;
+    ///
+    /// # safety
+    ///
+    /// when used, in order to use any of the rcu primitives safely, you must wrap the [`rcu_block_on`](TokioRuntimeExt::rcu_block_on)
+    /// function to run the main future on the runtime. using [`block_on`](tokio::runtime::Runtime::block_on) directly is forbidden.
+    unsafe fn enable_rcu(&mut self) -> &mut Self;
 }
 
 impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
-    fn enable_rcu(&mut self) -> &mut Self {
+    unsafe fn enable_rcu(&mut self) -> &mut Self {
         assert!(membarrier::is_supported());
         membarrier::register();
 
@@ -415,5 +420,119 @@ impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
         .on_after_task_poll(|_| {
             on_after_task_poll();
         })
+    }
+}
+
+/// extension methods for tokio's runtime.
+pub trait TokioRuntimeExt {
+    /// runs a future to completion on the tokio runtime, with RCU support.
+    ///
+    /// this can only be used with multi-threaded runtimes.
+    ///
+    /// # safety
+    ///
+    /// to use this, you must first call [`enable_rcu`](TokioRuntimeBuilderExt::enable_rcu) when building the runtime.
+    unsafe fn rcu_block_on<F: Future>(&self, future: F) -> F::Output;
+}
+impl TokioRuntimeExt for tokio::runtime::Runtime {
+    unsafe fn rcu_block_on<F: Future>(&self, future: F) -> F::Output {
+        // rcu is only supported for multithreaded runtimes
+        assert_eq!(self.handle().runtime_flavor(), RuntimeFlavor::MultiThread);
+
+        self.block_on(unsafe {
+            // SAFETY: we pass the wrapped future directly to `block_on`
+            RcuRootFuture::new(future)
+        })
+    }
+}
+
+pub fn rcu_block_on<F: Future>(future: F) -> F::Output {
+    unsafe {
+        // SAFETY: we use `rcu_block_on`
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .enable_rcu()
+            .build()
+            .unwrap();
+
+        // SAFETY: we called `enable_rcu`
+        rt.rcu_block_on(future)
+    }
+}
+
+/// a wrapper around the root future of a tokio `block_on` call.
+///
+/// this is required since tokio's hooks only apply to tokio's worker threads, but not to the main thread which initially calls `block_on`.
+///
+/// but, we need the main thread to also perform the book-keeping needed by the rcu primitive, in order for it to be able use the rcu
+/// primitives and to interact with the other threads using the rcu primtives.
+///
+/// so, we wrap the main future passed to `block_on` in a custom wrapper which emulates the call to the different worker hooks.
+/// this lets the main thread participate in the book-keeping like any other worker thread.
+#[derive(Debug, Clone, Copy)]
+struct RcuRootFuture<F> {
+    inner_future: F,
+    has_already_been_polled: bool,
+}
+impl<F> RcuRootFuture<F> {
+    /// wraps the provided future with the rcu root future logic.
+    ///
+    /// # safety
+    ///
+    /// may only be used to wrap the future provided to tokio's `block_on` function on a multithreaded runtime.
+    /// using this incorrectly will lead to undefined behaviour.
+    unsafe fn new(inner_future: F) -> Self {
+        Self {
+            inner_future,
+            has_already_been_polled: false,
+        }
+    }
+}
+impl<F: Future> Future for RcuRootFuture<F> {
+    type Output = F::Output;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Self::Output> {
+        if !self.has_already_been_polled {
+            // first time being polled on the main thread.
+            // mark the thread's start.
+            on_thread_start();
+
+            // SAFETY: we don't move out of anything
+            unsafe { self.as_mut().get_unchecked_mut().has_already_been_polled = true }
+        } else {
+            // we have already been polled in the previous iteration.
+            //
+            // we have returned `Poll::Pending` in the previous iteration, so the main thread parked itself and went to sleep,
+            // and now we are being polled again.
+            //
+            // this is basically an unpark.
+            on_thread_unpark();
+        }
+
+        // SAFETY: we do not move out of anything, we just project a field, which is safe
+        let inner_future = unsafe { self.map_unchecked_mut(|x| &mut x.inner_future) };
+
+        let res = inner_future.poll(cx);
+
+        // just finished polling the task.
+        on_after_task_poll();
+
+        match res {
+            Poll::Ready(_) => {
+                // in this case, the main future is done, so the main thread is also done.
+                on_thread_stop();
+            }
+            Poll::Pending => {
+                // if we return `Poll::Pending`, the main thread will park itself until an IO event occurs and wakes it up.
+                //
+                // so this is basically a thread park.
+                on_thread_park();
+            }
+        }
+
+        res
     }
 }
