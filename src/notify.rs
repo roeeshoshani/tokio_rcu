@@ -30,7 +30,7 @@ impl Notify {
     /// any notification received after this function returns, even if it wasn't `poll`ed or `await`ed yet, will be received by the
     /// returned future, and once `poll`ed it will complete immediately.
     ///
-    /// the registeration operation performed by this function provides acquire memory ordering against all previous notifiers of this
+    /// the registration operation performed by this function provides acquire memory ordering against all previous notifiers of this
     /// notify data structure.
     ///
     /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you,
@@ -141,7 +141,7 @@ impl Slot {
 }
 
 /// a future which will complete once a notification is received.
-/// the future is registered as soon as it is created, and while registed it is listening to any received notifications.
+/// the future is registered as soon as it is created, and while registered it is listening to any received notifications.
 pub struct Notified<'a> {
     slot: Slot,
     num_wakeups_snapshot: usize,
@@ -153,8 +153,8 @@ impl<'a> Notified<'a> {
         Self {
             slot: Slot::new(),
             num_wakeups_snapshot: notify.num_wakeups.load(
-                // the value loaded here does not need to be syncrhonized with, so we don't need any ordering in that sense, but we need
-                // acquire ordering so that the notified registeration operation has acquire semantics, which is relevant for the
+                // the value loaded here does not need to be synchronized with, so we don't need any ordering in that sense, but we need
+                // acquire ordering so that the notified registration operation has acquire semantics, which is relevant for the
                 // users of this primitive.
                 atomic::Ordering::Acquire,
             ),
@@ -207,7 +207,7 @@ impl<'a> Future for Notified<'a> {
                         // we are currently not in the list
 
                         if self.was_registered_into_list {
-                            // if we had registed ourselves into the list in a previous call to `poll`, and we are now no longer
+                            // if we had registered ourselves into the list in a previous call to `poll`, and we are now no longer
                             // in the list, it means that someone woke us up. so, we're done.
                             return Poll::Ready(());
                         } else {

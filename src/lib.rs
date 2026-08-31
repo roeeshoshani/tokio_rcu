@@ -466,7 +466,7 @@ pub fn rcu_block_on<F: Future>(future: F) -> F::Output {
 /// this is required since tokio's hooks only apply to tokio's worker threads, but not to the main thread which initially calls `block_on`.
 ///
 /// but, we need the main thread to also perform the book-keeping needed by the rcu primitive, in order for it to be able use the rcu
-/// primitives and to interact with the other threads using the rcu primtives.
+/// primitives and to interact with the other threads using the rcu primitives.
 ///
 /// so, we wrap the main future passed to `block_on` in a custom wrapper which emulates the call to the different worker hooks.
 /// this lets the main thread participate in the book-keeping like any other worker thread.
