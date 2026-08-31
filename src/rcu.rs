@@ -38,7 +38,7 @@ impl<'a, T> Deref for RcuReadGuard<'a, T> {
 }
 impl<'a, T> Drop for RcuReadGuard<'a, T> {
     fn drop(&mut self) {
-        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x - 1);
+        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x.checked_sub(1).unwrap());
     }
 }
 
@@ -81,7 +81,11 @@ impl<T> RcuOldData<T> {
         // in theory, users can't achieve this since the can't hold a guard across an await point. but, they can achieve this by
         // doing weird stuff like calling tokio's `handle.block_on` while holding a read guard on the current thread.
         // this check prevents such misuse from causing UB, instead converting it to a runtime panic.
-        assert_eq!(THIS_THREAD_CUR_NUM_LIVE_GUARDS.get(), 0);
+        assert_eq!(
+            THIS_THREAD_CUR_NUM_LIVE_GUARDS.get(),
+            0,
+            "cannot wait for an rcu grace period while holding rcu read guards on the current thread"
+        );
 
         // wait for all previous readers to stop using the old value
         synchronize_rcu().await;
@@ -155,7 +159,7 @@ impl<T> Rcu<T> {
             atomic::Ordering::Acquire,
         );
 
-        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x + 1);
+        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x.checked_add(1).unwrap());
 
         RcuReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
