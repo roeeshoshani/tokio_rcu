@@ -129,6 +129,8 @@ impl<T> Rcu<T> {
 
     /// reads the rcu protected pointer and provides access to the data it currently points to.
     ///
+    /// this must only be called from a future running inside the tokio runtime.
+    ///
     /// the usage of the data is limited to the provided closure to prevent it from being used across await points, and to prevent it
     /// from escaping the calling function. this is needed to guarantee correct use of the rcu protected pointer.
     pub fn with<F, R>(&self, f: F) -> R
