@@ -8,6 +8,10 @@ use crate::{
     utils::{PhantomUnsendUnsync, PtrMutSendSync},
 };
 
+/// a read guard representing the data pointed at by an rcu protected pointer. this provides a temporary view into the underlying data.
+///
+/// this guard must not be held across await points.
+/// this is enforced by making this guard [`!Send`](Send) and [`!Sync`](Sync).
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct RcuReadGuard<'a, T> {
     value: &'a T,
