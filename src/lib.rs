@@ -446,6 +446,7 @@ impl TokioRuntimeExt for tokio::runtime::Runtime {
     }
 }
 
+/// runs the provided future inside a new multi-threaded tokio runtime with all features enabled and with rcu support.
 pub fn rcu_block_on<F: Future>(future: F) -> F::Output {
     unsafe {
         // SAFETY: we use `rcu_block_on`
