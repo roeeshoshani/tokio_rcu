@@ -20,7 +20,7 @@ pub struct PtrMutSendSync<T> {
 impl<T> PtrMutSendSync<T> {
     /// creates a new wrapper around the given pointer.
     ///
-    /// # safety
+    /// # Safety
     ///
     /// any `Send` or `Sync` operation performed on the wrapped pointer must be safe according to the semantics of the underlying
     /// pointer.

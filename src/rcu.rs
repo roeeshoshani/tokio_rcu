@@ -36,7 +36,7 @@ pub struct RcuOldData<T> {
 impl<T> RcuOldData<T> {
     /// creates a new old data pointer guard.
     ///
-    /// # safety
+    /// # Safety
     ///
     /// the provided pointer must be the old data pointer of an rcu protected pointer, and must have already been swapped by a new
     /// pointer.

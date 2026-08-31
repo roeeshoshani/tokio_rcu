@@ -393,7 +393,7 @@ pub trait TokioRuntimeBuilderExt {
     /// enable rcu support for this tokio runtime.
     /// must be called when constructing the runtime in order to use any rcu related primitive inside the runtime.
     ///
-    /// # safety
+    /// # Safety
     ///
     /// when used, in order to use any of the rcu primitives safely, you must wrap the [`rcu_block_on`](TokioRuntimeExt::rcu_block_on)
     /// function to run the main future on the runtime. using [`block_on`](tokio::runtime::Runtime::block_on) directly is forbidden.
@@ -429,7 +429,7 @@ pub trait TokioRuntimeExt {
     ///
     /// this can only be used with multi-threaded runtimes.
     ///
-    /// # safety
+    /// # Safety
     ///
     /// to use this, you must first call [`enable_rcu`](TokioRuntimeBuilderExt::enable_rcu) when building the runtime.
     unsafe fn rcu_block_on<F: Future>(&self, future: F) -> F::Output;
@@ -478,7 +478,7 @@ struct RcuRootFuture<F> {
 impl<F> RcuRootFuture<F> {
     /// wraps the provided future with the rcu root future logic.
     ///
-    /// # safety
+    /// # Safety
     ///
     /// may only be used to wrap the future provided to tokio's `block_on` function on a multithreaded runtime.
     /// using this incorrectly will lead to undefined behaviour.

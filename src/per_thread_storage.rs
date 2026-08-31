@@ -181,7 +181,7 @@ impl Drop for OwnedThreadStorageSlot {
 
 thread_local! {
     /// a thread local variable which represents the storage slot currently owned by the current thread.
-    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = OwnedThreadStorageSlot::unallocated();
+    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = const { OwnedThreadStorageSlot::unallocated() };
 }
 
 /// returns the storage slot id of the current thread, assuming that a storage slot was already allocated for the current
