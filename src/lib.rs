@@ -429,13 +429,16 @@ pub trait TokioRuntimeExt {
     ///
     /// this can only be used with multi-threaded runtimes.
     ///
+    /// note that only futures that are both [`Send`] and [`Sync`] can be executed using this function, since constraining the
+    /// future in such a way is the only way to guarantee the safety of the rcu logic.
+    ///
     /// # Safety
     ///
     /// to use this, you must first call [`enable_rcu`](TokioRuntimeBuilderExt::enable_rcu) when building the runtime.
-    unsafe fn rcu_block_on<F: Future>(&self, future: F) -> F::Output;
+    unsafe fn rcu_block_on<F: Future + Send + Sync>(&self, future: F) -> F::Output;
 }
 impl TokioRuntimeExt for tokio::runtime::Runtime {
-    unsafe fn rcu_block_on<F: Future>(&self, future: F) -> F::Output {
+    unsafe fn rcu_block_on<F: Future + Send + Sync>(&self, future: F) -> F::Output {
         // rcu is only supported for multithreaded runtimes
         assert_eq!(self.handle().runtime_flavor(), RuntimeFlavor::MultiThread);
 
@@ -447,7 +450,10 @@ impl TokioRuntimeExt for tokio::runtime::Runtime {
 }
 
 /// runs the provided future inside a new multi-threaded tokio runtime with all features enabled and with rcu support.
-pub fn rcu_block_on<F: Future>(future: F) -> F::Output {
+///
+/// note that only futures that are both [`Send`] and [`Sync`] can be executed using this function, since constraining the
+/// future in such a way is the only way to guarantee the safety of the rcu logic.
+pub fn rcu_block_on<F: Future + Send + Sync>(future: F) -> F::Output {
     unsafe {
         // SAFETY: we use `rcu_block_on`
         let rt = tokio::runtime::Builder::new_multi_thread()
