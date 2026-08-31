@@ -185,3 +185,5 @@ impl<T> Drop for Rcu<T> {
         let _ = unsafe { Box::from_raw(ptr) };
     }
 }
+unsafe impl<T: Send> Send for Rcu<T> {}
+unsafe impl<T: Sync> Sync for Rcu<T> {}
