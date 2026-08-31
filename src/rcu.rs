@@ -146,13 +146,15 @@ impl<T> Rcu<T> {
 
     /// reads the rcu protected pointer, returning a read guard to the data it currently points to.
     ///
-    /// # Safety
-    ///
     /// this must only be called from a future running inside the tokio runtime.
     ///
-    /// furthermore, this guard must not be held across await points, and must not escape.
+    /// # Safety
     ///
-    /// as soon as the future that acquired this read guard gets to a point where it `await`s or finished execution (basically any
+    /// the returned guard must not be held across await points, must not be held after the future that acquired it finishes,
+    /// and must not escape that future's context (e.g. must not be saved inside a global variable and held across an await point
+    /// or longer than the future's lifetime).
+    ///
+    /// as soon as the future that acquired this read guard gets to a point where it `await`s or finishes execution (basically any
     /// point which voluntarily yields the future), the guard must have already been dropped.
     pub unsafe fn read(&self) -> RcuReadGuard<'_, T> {
         assert!(
