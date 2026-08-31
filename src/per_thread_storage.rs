@@ -196,6 +196,11 @@ pub fn this_thread_get_storage_slot() -> &'static ThreadStorageSlotValue {
     THREAD_STORAGE_SLOT.with(|storage_slot| thread_storage_slot_get(storage_slot.id().unwrap()))
 }
 
+/// checks if the current thread currently has a storage slot allocated for it.
+pub fn this_thread_does_have_allocated_storage_slot() -> bool {
+    THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.id.get().is_some())
+}
+
 /// allocates a storage slot for the current thread, if one is not already allocated.
 pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) {
     THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.alloc(initial_thread_state))

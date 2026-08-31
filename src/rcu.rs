@@ -5,6 +5,9 @@ use std::{
 };
 
 use crate::{
+    per_thread_storage::{
+        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot,
+    },
     synchronize_rcu,
     utils::{PhantomUnsendUnsync, PtrMutSendSync},
 };
@@ -160,6 +163,11 @@ impl<T> Rcu<T> {
         );
 
         THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x.checked_add(1).unwrap());
+
+        assert!(
+            this_thread_does_have_allocated_storage_slot(),
+            "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime"
+        );
 
         RcuReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
