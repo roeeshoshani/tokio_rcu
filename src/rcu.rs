@@ -155,6 +155,11 @@ impl<T> Rcu<T> {
     /// as soon as the future that acquired this read guard gets to a point where it `await`s or finished execution (basically any
     /// point which voluntarily yields the future), the guard must have already been dropped.
     pub unsafe fn read(&self) -> RcuReadGuard<'_, T> {
+        assert!(
+            this_thread_does_have_allocated_storage_slot(),
+            "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime"
+        );
+
         let ptr = self.value_ptr.load(
             // we want acquire ordering to make sure that the write to the pointed-at data happens before the
             // write of the pointer itself, so that when we use the loaded pointer, we are guaranteed to get
@@ -163,11 +168,6 @@ impl<T> Rcu<T> {
         );
 
         THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x.checked_add(1).unwrap());
-
-        assert!(
-            this_thread_does_have_allocated_storage_slot(),
-            "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime"
-        );
 
         RcuReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
