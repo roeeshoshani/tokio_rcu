@@ -108,8 +108,8 @@ impl<T> Rcu<T> {
     {
         // SAFETY: the guard only lives throughout the current function.
         // so, the future can't yield while holding it.
-        // and, it can't escape since the callback function F is lifetime invariant, so it can't assume anything about the lifetime
-        // of the provided reference.
+        // and, it can't escape since the callback function F is an HRTB, so it can't assume anything about the lifetime of the provided
+        // reference.
         let guard = unsafe { self.read() };
 
         f(&*guard)
