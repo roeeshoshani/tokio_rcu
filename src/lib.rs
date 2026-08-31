@@ -5,7 +5,8 @@ use crate::{
     notify::Notify,
     per_thread_storage::{
         this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
-        this_thread_get_storage_slot, this_thread_get_storage_slot_id, thread_storage_slot_get_all,
+        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot,
+        this_thread_get_storage_slot_id, thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
 };
@@ -288,6 +289,7 @@ fn this_thread_see_new_epoch_id() -> EpochId {
 }
 
 fn on_thread_start() {
+    assert!(!this_thread_does_have_allocated_storage_slot());
     let epoch_id = this_thread_see_new_epoch_id();
     this_thread_alloc_storage_slot(ThreadState {
         last_seen_epoch_id: epoch_id,
@@ -296,6 +298,7 @@ fn on_thread_start() {
 }
 
 fn on_thread_stop() {
+    assert!(this_thread_does_have_allocated_storage_slot());
     this_thread_dealloc_storage_slot();
 }
 
