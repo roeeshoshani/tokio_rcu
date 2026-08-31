@@ -10,8 +10,9 @@ use crate::{
 
 /// a read guard representing the data pointed at by an rcu protected pointer. this provides a temporary view into the underlying data.
 ///
-/// this guard must not be held across await points.
-/// this is enforced by making this guard [`!Send`](Send) and [`!Sync`](Sync).
+/// this guard must not be held across await points, and must not escape the future that acquired it in any way.
+///
+/// this must manually be taken care of by the programmer. incorrect use will lead to undefined behaviour.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct RcuReadGuard<'a, T> {
     value: &'a T,
@@ -97,9 +98,34 @@ impl<T> Rcu<T> {
         }
     }
 
+    /// reads the rcu protected pointer and provides access to the data it currently points to.
+    ///
+    /// the usage of the data is limited to the provided closure to prevent it from being used across await points, and to prevent it
+    /// from escaping the calling function. this is needed to guarantee correct use of the rcu protected pointer.
+    pub fn with<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&T) -> R,
+    {
+        // SAFETY: the guard only lives throughout the current function.
+        // so, the future can't yield while holding it.
+        // and, it can't escape since the callback function F is lifetime invariant, so it can't assume anything about the lifetime
+        // of the provided reference.
+        let guard = unsafe { self.read() };
+
+        f(&*guard)
+    }
+
     /// reads the rcu protected pointer, returning a read guard to the data it currently points to.
-    // TODO: explain the limitations of this guard.
-    pub fn read(&self) -> RcuReadGuard<'_, T> {
+    ///
+    /// # Safety
+    ///
+    /// this must only be called from a future running inside the tokio runtime.
+    ///
+    /// furthermore, this guard must not be held across await points, and must not escape.
+    ///
+    /// as soon as the future that acquired this read guard gets to a point where it `await`s or finished execution (basically any
+    /// point which voluntarily yields the future), the guard must have already been dropped.
+    pub unsafe fn read(&self) -> RcuReadGuard<'_, T> {
         let ptr = self.value_ptr.load(
             // we want acquire ordering to make sure that the write to the pointed-at data happens before the
             // write of the pointer itself, so that when we use the loaded pointer, we are guaranteed to get
