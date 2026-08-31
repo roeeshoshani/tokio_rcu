@@ -1,4 +1,5 @@
 use std::{
+    cell::Cell,
     ops::Deref,
     sync::atomic::{self, AtomicPtr},
 };
@@ -8,12 +9,22 @@ use crate::{
     utils::{PhantomUnsendUnsync, PtrMutSendSync},
 };
 
+thread_local! {
+    /// a per-thread variable which holds the number of active rcu read guards held by the current thread.
+    ///
+    /// this is used to prevent a thread from swapping the pointer on the same thread while holding a guard (e.g. using
+    /// tokio's `handle.block_on` while holding a read guard on the current thread).
+    ///
+    /// this is mainly a protection around misuse, but should be cheap enough to make it worth it.
+    static THIS_THREAD_CUR_NUM_LIVE_GUARDS: Cell<usize> = Cell::new(0);
+}
+
 /// a read guard representing the data pointed at by an rcu protected pointer. this provides a temporary view into the underlying data.
 ///
 /// this guard must not be held across await points, and must not escape the future that acquired it in any way.
 ///
 /// this must manually be taken care of by the programmer. incorrect use will lead to undefined behaviour.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RcuReadGuard<'a, T> {
     value: &'a T,
     _phantom: PhantomUnsendUnsync,
@@ -23,6 +34,11 @@ impl<'a, T> Deref for RcuReadGuard<'a, T> {
 
     fn deref(&self) -> &Self::Target {
         self.value
+    }
+}
+impl<'a, T> Drop for RcuReadGuard<'a, T> {
+    fn drop(&mut self) {
+        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x - 1);
     }
 }
 
@@ -61,6 +77,12 @@ impl<T> RcuOldData<T> {
     ///
     /// function is not cancellation safe. if cancelled, it will leak the pointer and panic.
     pub async fn wait(self) -> Box<T> {
+        // make sure that the current thread is not holding any live guards while waiting for all existing users of the pointer.
+        // in theory, users can't achieve this since the can't hold a guard across an await point. but, they can achieve this by
+        // doing weird stuff like calling tokio's `handle.block_on` while holding a read guard on the current thread.
+        // this check prevents such misuse from causing UB, instead converting it to a runtime panic.
+        assert_eq!(THIS_THREAD_CUR_NUM_LIVE_GUARDS.get(), 0);
+
         // wait for all previous readers to stop using the old value
         synchronize_rcu().await;
 
@@ -132,6 +154,8 @@ impl<T> Rcu<T> {
             // a valid object.
             atomic::Ordering::Acquire,
         );
+
+        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x + 1);
 
         RcuReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
