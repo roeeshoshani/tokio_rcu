@@ -5,9 +5,7 @@ use std::{
 };
 
 use crate::{
-    per_thread_storage::{
-        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot,
-    },
+    per_thread_storage::this_thread_does_have_allocated_storage_slot,
     synchronize_rcu,
     utils::{PhantomUnsendUnsync, PtrMutSendSync},
 };

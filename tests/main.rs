@@ -23,9 +23,10 @@ fn no_uaf_during_stress() {
                         loop {
                             // extra scope to scope the rcu read guard
                             {
-                                let value = data.read();
+                                // SAFETY: guard is scoped and dropped before the next await point
+                                let value = unsafe { data.read() };
 
-                                let orig_value = black_box(black_box(&value).clone());
+                                let orig_value: String = black_box(black_box(&*value).clone());
 
                                 // make sure that the string is one of the valid options.
                                 // the writers overwrite the data of old strings with invalid contents, so that if we happen
@@ -34,7 +35,7 @@ fn no_uaf_during_stress() {
 
                                 // use the value for a while to try to trigger some UAFs.
                                 for _ in 0..READER_NUM_CLONES {
-                                    let cloned_value = black_box(black_box(&value).clone());
+                                    let cloned_value = black_box(black_box(&*value).clone());
 
                                     // the same guard should always yield the same data.
                                     assert_eq!(orig_value, cloned_value);
@@ -126,9 +127,10 @@ fn no_uaf_with_sleeps() {
                             loop {
                                 // extra scope to scope the rcu read guard
                                 {
+                                    // SAFETY: guard is scoped and dropped before the next await point
                                     let value = data.read();
 
-                                    let orig_value = black_box(black_box(&value).clone());
+                                    let orig_value: String = black_box(black_box(&*value).clone());
 
                                     // make sure that the string is one of the valid options.
                                     // the writers overwrite the data of old strings with invalid contents, so that if we happen
@@ -137,7 +139,7 @@ fn no_uaf_with_sleeps() {
 
                                     // use the value for a while to try to trigger some UAFs.
                                     for _ in 0..READER_NUM_CLONES {
-                                        let cloned_value = black_box(black_box(&value).clone());
+                                        let cloned_value = black_box(black_box(&*value).clone());
 
                                         // the same guard should always yield the same data.
                                         assert_eq!(orig_value, cloned_value);
@@ -212,6 +214,7 @@ fn enable_rcu_multiple_calls() {
                 let state = state.clone();
                 async move {
                     loop {
+                        // SAFETY: guard is scoped and dropped before the next await point
                         let value = state.read();
                         if *value == "done" {
                             break;
@@ -255,7 +258,8 @@ fn enable_rcu_multiple_runtimes() {
             let state = state.clone();
             async move {
                 loop {
-                    let value = state.read();
+                    // SAFETY: guard is scoped and dropped before the next await point
+                    let value = unsafe { state.read() };
                     if *value == "done" {
                         break;
                     }
@@ -311,9 +315,10 @@ fn double_buffering() {
                         loop {
                             // extra scope to scope the rcu read guard
                             {
-                                let value = data.read();
+                                // SAFETY: guard is scoped and dropped before the next await point
+                                let value = unsafe { data.read() };
 
-                                let orig_value = black_box(black_box(&value).clone());
+                                let orig_value: Buffer = black_box(black_box(&*value).clone());
 
                                 assert!(
                                     orig_value.buffer_index == 0 || orig_value.buffer_index == 1
@@ -321,7 +326,7 @@ fn double_buffering() {
 
                                 // use the value for a while to try to trigger some UAFs.
                                 for _ in 0..READER_NUM_CLONES {
-                                    let cloned_value = black_box(black_box(&value).clone());
+                                    let cloned_value = black_box(black_box(&*value).clone());
 
                                     // the same guard should always yield the same data.
                                     assert_eq!(orig_value, cloned_value);
