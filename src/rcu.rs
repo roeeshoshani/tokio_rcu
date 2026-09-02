@@ -7,7 +7,7 @@ use std::{
 use crate::{
     per_thread_storage::this_thread_does_have_allocated_storage_slot,
     synchronize_rcu,
-    utils::{PhantomUnsendUnsync, PtrMutSendSync},
+    utils::{PhantomUnsend, PtrMutSendSync},
 };
 
 thread_local! {
@@ -28,7 +28,7 @@ thread_local! {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RcuReadGuard<'a, T> {
     value: &'a T,
-    _phantom: PhantomUnsendUnsync,
+    _phantom: PhantomUnsend,
 }
 impl<'a, T> Deref for RcuReadGuard<'a, T> {
     type Target = T;
@@ -174,7 +174,7 @@ impl<T> Rcu<T> {
         RcuReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
             value: unsafe { &*ptr },
-            _phantom: PhantomUnsendUnsync::new(),
+            _phantom: PhantomUnsend::new(),
         }
     }
 

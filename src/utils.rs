@@ -1,17 +1,18 @@
 use std::marker::PhantomData;
 
-/// a phantom type which is not `Send` and also not `Sync`.
+/// a phantom type which is not `Send`.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct PhantomUnsendUnsync {
+pub struct PhantomUnsend {
     phantom: PhantomData<*const ()>,
 }
-impl PhantomUnsendUnsync {
+impl PhantomUnsend {
     pub const fn new() -> Self {
         Self {
             phantom: PhantomData,
         }
     }
 }
+unsafe impl Sync for PhantomUnsend {}
 
 /// a wrapper around a `*mut T` which makes it `Send` and `Sync` if `T` is `Send` and `Sync`.
 pub struct PtrMutSendSync<T> {
