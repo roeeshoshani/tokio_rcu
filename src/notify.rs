@@ -276,41 +276,50 @@ impl<'a> Drop for Notified<'a> {
             return;
         }
 
-        let _guard = self.notify.lock.lock().unwrap();
+        match self.notify.lock.lock() {
+            Ok(_guard) => {
+                // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
+                unsafe {
+                    let is_in_list = *self.slot.is_in_list.get();
+                    if is_in_list {
+                        // remove ourselves from the list
 
-        // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
-        unsafe {
-            let is_in_list = *self.slot.is_in_list.get();
-            if is_in_list {
-                // remove ourselves from the list
+                        // set next's pprev to our pprev
+                        let next_opt = *self.slot.next.get();
+                        if let Some(next_nonnull) = next_opt {
+                            let next = next_nonnull.as_ptr();
+                            let next_pprev = UnsafeCell::raw_get(&raw mut (*next).pprev);
+                            *next_pprev = *self.slot.pprev.get();
+                        }
 
-                // set next's pprev to our pprev
-                let next_opt = *self.slot.next.get();
-                if let Some(next_nonnull) = next_opt {
-                    let next = next_nonnull.as_ptr();
-                    let next_pprev = UnsafeCell::raw_get(&raw mut (*next).pprev);
-                    *next_pprev = *self.slot.pprev.get();
-                }
+                        // set prev's next to our next
+                        let pprev_opt = *self.slot.pprev.get();
+                        match pprev_opt {
+                            Some(pprev_nonnull) => {
+                                let pprev = pprev_nonnull.as_ptr();
+                                *pprev = next_opt;
+                            }
+                            None => {
+                                // when we are in the list but pprev is `None`, it means that we are the head of the list
+                                debug_assert_eq!(
+                                    *self.notify.waiters_list_head.get(),
+                                    Some(NonNull::from_ref(&self.slot))
+                                );
 
-                // set prev's next to our next
-                let pprev_opt = *self.slot.pprev.get();
-                match pprev_opt {
-                    Some(pprev_nonnull) => {
-                        let pprev = pprev_nonnull.as_ptr();
-                        *pprev = next_opt;
-                    }
-                    None => {
-                        // when we are in the list but pprev is `None`, it means that we are the head of the list
-                        debug_assert_eq!(
-                            *self.notify.waiters_list_head.get(),
-                            Some(NonNull::from_ref(&self.slot))
-                        );
-
-                        *self.notify.waiters_list_head.get() = next_opt;
+                                *self.notify.waiters_list_head.get() = next_opt;
+                            }
+                        }
                     }
                 }
             }
-        }
+            Err(_) => {
+                // if the lock is poisoned, someone panicked while holding it.
+                // in this case, the `Notify` that this future is associated with is basically dead, and the waiter list will no
+                // longer be accessed by anyone.
+                // so it doesn't matter whether we are in the list or not, we can just release all of our memory without having to
+                // first remove ourselves from the list.
+            }
+        };
     }
 }
 
