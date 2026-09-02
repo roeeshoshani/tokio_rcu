@@ -17,7 +17,7 @@ thread_local! {
     /// tokio's `handle.block_on` while holding a read guard on the current thread).
     ///
     /// this is mainly a protection around misuse, but should be cheap enough to make it worth it.
-    static THIS_THREAD_CUR_NUM_LIVE_GUARDS: Cell<usize> = Cell::new(0);
+    static THIS_THREAD_CUR_NUM_LIVE_GUARDS: Cell<usize> = const { Cell::new(0) };
 }
 
 /// a read guard representing the data pointed at by an rcu protected pointer. this provides a temporary view into the underlying data.
