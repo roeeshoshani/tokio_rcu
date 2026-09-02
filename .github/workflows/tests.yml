@@ -29,14 +29,23 @@ jobs:
       - run: cargo install --locked cargo-all-features@$CARGO_ALL_FEATURES_VERSION
       - run: cargo all-features check --all-targets
 
-  tests:
+  tests-release-mode:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
 
       - run: cargo install --locked cargo-all-features@$CARGO_ALL_FEATURES_VERSION
-      - run: cargo all-features test
+      - run: cargo all-features nextest run --release
+
+  tests-debug-mode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+
+      - run: cargo install --locked cargo-all-features@$CARGO_ALL_FEATURES_VERSION
+      - run: cargo all-features nextest run
 
   fmt:
     runs-on: ubuntu-latest
