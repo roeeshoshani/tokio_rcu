@@ -9,7 +9,6 @@ on:
 env:
   CARGO_ALL_FEATURES_VERSION: "1.12.0"
   CARGO_REEDME_VERSION: "0.6.1"
-  OS_OPTIONS: '["ubuntu-latest", "ubuntu-24.04-arm", "windows-latest", "windows-11-arm"]'
 
 permissions:
   contents: read
@@ -22,7 +21,7 @@ jobs:
   check:
     strategy:
       matrix:
-        os: ${{ fromJSON(env.SUPPORTED_OS) }}
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: --cfg tokio_unstable -D warnings
@@ -36,7 +35,7 @@ jobs:
   tests-release-mode:
     strategy:
       matrix:
-        os: ${{ fromJSON(env.SUPPORTED_OS) }}
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -48,7 +47,7 @@ jobs:
   tests-debug-mode:
     strategy:
       matrix:
-        os: ${{ fromJSON(env.SUPPORTED_OS) }}
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
