@@ -28,6 +28,10 @@ thread_local! {
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RcuReadGuard<'a, T> {
     value: &'a T,
+
+    /// the guard must not be sent as it is associated with thread local state - both the `THIS_THREAD_CUR_NUM_LIVE_GUARDS` increment
+    /// and the rcu book-keeping part, where we track which threads can use an old rcu pointer, while assuming that threads don't pass
+    /// stale pointers between one another.
     _phantom: PhantomUnsend,
 }
 impl<'a, T> Deref for RcuReadGuard<'a, T> {
