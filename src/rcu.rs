@@ -221,6 +221,12 @@ impl<T> Rcu<T> {
         self.swap_nowait(new_value).wait().await
     }
 }
+impl<T: Clone> Rcu<T> {
+    /// reads the rcu protected pointer and clones the value that it currently points to.
+    pub fn read_clone(&self) -> T {
+        self.with(|x| x.clone())
+    }
+}
 impl<T> Drop for Rcu<T> {
     fn drop(&mut self) {
         let ptr = self.value_ptr.load(
