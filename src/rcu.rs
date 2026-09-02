@@ -43,7 +43,12 @@ impl<'a, T> Deref for RcuReadGuard<'a, T> {
 }
 impl<'a, T> Drop for RcuReadGuard<'a, T> {
     fn drop(&mut self) {
-        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x.checked_sub(1).unwrap());
+        THIS_THREAD_CUR_NUM_LIVE_GUARDS.set(
+            THIS_THREAD_CUR_NUM_LIVE_GUARDS
+                .get()
+                .checked_sub(1)
+                .unwrap(),
+        );
     }
 }
 
@@ -180,7 +185,12 @@ impl<T> Rcu<T> {
             atomic::Ordering::Acquire,
         );
 
-        THIS_THREAD_CUR_NUM_LIVE_GUARDS.update(|x| x.checked_add(1).unwrap());
+        THIS_THREAD_CUR_NUM_LIVE_GUARDS.set(
+            THIS_THREAD_CUR_NUM_LIVE_GUARDS
+                .get()
+                .checked_add(1)
+                .unwrap(),
+        );
 
         RcuReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
