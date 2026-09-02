@@ -89,7 +89,7 @@ fn swap_inside_with() {
                 assert!(extract_string_panic_message(err).contains("cannot wait for an rcu grace period while holding rcu read guards on the current thread"));
 
                 // value must not have been dropped
-                let _: String = value.clone();
+                let _: String = black_box(black_box(value).clone());
             }
         })
     });
