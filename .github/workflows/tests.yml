@@ -9,7 +9,7 @@ on:
 env:
   CARGO_ALL_FEATURES_VERSION: "1.12.0"
   CARGO_NEXTEST_VERSION: "0.9.143"
-  CARGO_REEDME_VERSION: "0.6.1"
+  CARGO_RDME_VERSION: "2.2.2"
 
 permissions:
   contents: read
@@ -120,11 +120,12 @@ jobs:
 
       - uses: baptiste0928/cargo-install@v3
         with:
-          crate: cargo-reedme
+          crate: cargo-rdme
           locked: true
-          version: ${{ env.CARGO_REEDME_VERSION }}
+          version: ${{ env.CARGO_RDME_VERSION }}
 
-      - run: cargo +nightly reedme --check
+      - run: cargo rdme install-rust-toolchain-for-intralinks
+      - run: cargo rdme --check
 
   doc:
     runs-on: ubuntu-latest
