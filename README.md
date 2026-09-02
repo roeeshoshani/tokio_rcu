@@ -107,8 +107,8 @@ to use the rcu primitives, you must use an rcu enabled tokio runtime.
 the easiest way to do this is to use the [`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/fn.rcu_block_on.html) function which creates a tokio runtime with rcu support enabled, and then
 runs the provided future inside that runtime using tokio’s [`block_on`](https://docs.rs/tokio/latest/tokio/runtime/runtime/Runtime/fn.block_on.html).
 
-if you wish to manually configure your runtime, you can use the more low-level [`enable_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeBuilderExt.htmlfn.enable_rcu.html) and
-[`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeExt.htmlfn.rcu_block_on.html) functions.
+if you wish to manually configure your runtime, you can use the more low-level [`enable_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeBuilderExt.html#tymethod.enable_rcu) and
+[`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeExt.html#tymethod.rcu_block_on) functions.
 
 # performance overhead
 
@@ -120,7 +120,7 @@ but, this crate performs a lot of efforts to make this overhead as small as poss
 which are called very often.
 
 specifically, the current implementation of the `on_after_task_poll` hook is basically just a couple of atomic reads and writes,
-and is basically unnoticable in terms of performance.
+and is basically unnoticeable in terms of performance.
 
 # other async runtimes
 

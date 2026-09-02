@@ -105,7 +105,7 @@
 //! which are called very often.
 //!
 //! specifically, the current implementation of the `on_after_task_poll` hook is basically just a couple of atomic reads and writes,
-//! and is basically unnoticable in terms of performance.
+//! and is basically unnoticeable in terms of performance.
 //!
 //! # other async runtimes
 //!
