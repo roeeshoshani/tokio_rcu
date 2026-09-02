@@ -88,10 +88,10 @@ a specific execution context (which can be a cpu core, or an OS thread) reaches 
 any rcu protected pointer.
 
 in this specific crate, the execution contexts are tokio threads, and the quiescent state was chosen to be tokio’s
-[`on_after_task_poll`] hook.
+[`on_after_task_poll`](https://docs.rs/tokio/latest/tokio/runtime/builder/Builder/fn.on_after_task_poll.html) hook.
 
 this works because we limit the usage of rcu protected pointers in a way that prevents them from being held across await points.
-so, when the runtime reaches the [`on_after_task_poll`] hook, it is guaranteed that no future is currently being executed on
+so, when the runtime reaches the `on_after_task_poll` hook, it is guaranteed that no future is currently being executed on
 the current thread, and since rcu protected pointers can’t be held across await points, it is basically guaranteed that the current
 thread is not holding any rcu protected pointers.
 
@@ -108,18 +108,18 @@ the easiest way to do this is to use the [`rcu_block_on`](https://docs.rs/tokio_
 runs the provided future inside that runtime using tokio’s [`block_on`](https://docs.rs/tokio/latest/tokio/runtime/runtime/Runtime/fn.block_on.html).
 
 if you wish to manually configure your runtime, you can use the more low-level [`enable_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeBuilderExt.htmlfn.enable_rcu.html) and
-[`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeExt.html#tymethod.rcu_block_on) functions.
+[`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeExt.htmlfn.rcu_block_on.html) functions.
 
 # performance overhead
 
 enabling rcu for a tokio runtime does introduce a little bit of overhead.
 
-specifically, this crate uses tokio hooks (e.g. [`on_after_task_poll`]) to track quiescent states of tokio’s worker threads.
+specifically, this crate uses tokio hooks (e.g. `on_after_task_poll`) to track quiescent states of tokio’s worker threads.
 
-but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
+but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like `on_after_task_poll`
 which are called very often.
 
-specifically, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic reads and writes,
+specifically, the current implementation of the `on_after_task_poll` hook is basically just a couple of atomic reads and writes,
 and is basically unnoticable in terms of performance.
 
 # other async runtimes
@@ -129,9 +129,7 @@ runtime, and because it already provides hooks which allow me to track quiescent
 
 # stability
 
-this crate currently requires using the `tokio_unstable` configuration of tokio. this is required since the [`on_after_task_poll`]
+this crate currently requires using the `tokio_unstable` configuration of tokio. this is required since the `on_after_task_poll`
 hook is currently unstable, and is needed to make this crate work.
-
-[`on_after_task_poll`]: https://docs.rs/tokio/latest/tokio/runtimehttps://docs.rs/tokio/latest/tokio/runtimehttps://docs.rs/tokio/latest/tokio/runtimehttps://docs.rs/tokio/latest/tokio/runtimehttps://docs.rs/tokio/latest/tokio/runtimehttps://docs.rs/tokio/latest/tokio/runtime/builder/Builder/fn.on_after_task_poll.html
 
 <!-- cargo-reedme: end -->

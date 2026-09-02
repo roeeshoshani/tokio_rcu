@@ -73,10 +73,10 @@
 //! any rcu protected pointer.
 //!
 //! in this specific crate, the execution contexts are tokio threads, and the quiescent state was chosen to be tokio's
-//! [`on_after_task_poll`] hook.
+//! [`on_after_task_poll`](tokio::runtime::Builder::on_after_task_poll) hook.
 //!
 //! this works because we limit the usage of rcu protected pointers in a way that prevents them from being held across await points.
-//! so, when the runtime reaches the [`on_after_task_poll`] hook, it is guaranteed that no future is currently being executed on
+//! so, when the runtime reaches the `on_after_task_poll` hook, it is guaranteed that no future is currently being executed on
 //! the current thread, and since rcu protected pointers can't be held across await points, it is basically guaranteed that the current
 //! thread is not holding any rcu protected pointers.
 //!
@@ -99,12 +99,12 @@
 //!
 //! enabling rcu for a tokio runtime does introduce a little bit of overhead.
 //!
-//! specifically, this crate uses tokio hooks (e.g. [`on_after_task_poll`]) to track quiescent states of tokio's worker threads.
+//! specifically, this crate uses tokio hooks (e.g. `on_after_task_poll`) to track quiescent states of tokio's worker threads.
 //!
-//! but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
+//! but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like `on_after_task_poll`
 //! which are called very often.
 //!
-//! specifically, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic reads and writes,
+//! specifically, the current implementation of the `on_after_task_poll` hook is basically just a couple of atomic reads and writes,
 //! and is basically unnoticable in terms of performance.
 //!
 //! # other async runtimes
@@ -114,10 +114,8 @@
 //!
 //! # stability
 //!
-//! this crate currently requires using the `tokio_unstable` configuration of tokio. this is required since the [`on_after_task_poll`]
+//! this crate currently requires using the `tokio_unstable` configuration of tokio. this is required since the `on_after_task_poll`
 //! hook is currently unstable, and is needed to make this crate work.
-//!
-//! [`on_after_task_poll`]: tokio::runtime::Builder::on_after_task_poll
 use std::{sync::atomic, task::Poll};
 
 use crate::{
