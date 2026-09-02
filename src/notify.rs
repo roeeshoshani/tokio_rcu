@@ -1,6 +1,7 @@
 use std::{
     cell::UnsafeCell,
     marker::PhantomPinned,
+    panic::UnwindSafe,
     pin::Pin,
     ptr::NonNull,
     sync::atomic::{self, AtomicUsize},
@@ -107,6 +108,9 @@ impl Notify {
 unsafe impl Send for Notify {}
 unsafe impl Sync for Notify {}
 
+/// notify maintains a valid state even if panics occur while using it.
+impl UnwindSafe for Notify {}
+
 type Next = Option<NonNull<Slot>>;
 
 struct Slot {
@@ -194,11 +198,14 @@ impl<'a> Future for Notified<'a> {
                         // already in the list, update our waker
                         let waker = &mut *self.slot.waker.get();
                         match &*waker {
+                            // note that even if `will_wake` panics we leave everything in a clean state.
                             Some(existing_waker) if existing_waker.will_wake(cx.waker()) => {
                                 // keep the existing waker
                             }
                             _ => {
-                                // need to use a new waker
+                                // need to use a new waker.
+                                //
+                                // note that even if the the waker's `clone` impl panics we leave everything in a clean state.
                                 *waker = Some(cx.waker().clone());
                             }
                         }
