@@ -34,7 +34,7 @@ jobs:
         with:
           crate: cargo-all-features
           locked: true
-          version: $CARGO_ALL_FEATURES_VERSION
+          version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features check --all-targets
 
@@ -51,13 +51,13 @@ jobs:
         with:
           crate: cargo-nextest
           locked: true
-          version: $CARGO_NEXTEST_VERSION
+          version: ${{ env.CARGO_NEXTEST_VERSION }}
 
       - uses: baptiste0928/cargo-install@v3
         with:
           crate: cargo-all-features
           locked: true
-          version: $CARGO_ALL_FEATURES_VERSION
+          version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features nextest run --release
 
@@ -74,13 +74,13 @@ jobs:
         with:
           crate: cargo-nextest
           locked: true
-          version: $CARGO_NEXTEST_VERSION
+          version: ${{ env.CARGO_NEXTEST_VERSION }}
 
       - uses: baptiste0928/cargo-install@v3
         with:
           crate: cargo-all-features
           locked: true
-          version: $CARGO_ALL_FEATURES_VERSION
+          version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features nextest run
 
@@ -108,7 +108,7 @@ jobs:
         with:
           crate: cargo-all-features
           locked: true
-          version: $CARGO_ALL_FEATURES_VERSION
+          version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features clippy --all-targets -- -D warnings
 
@@ -118,7 +118,12 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
 
-      - run: cargo +nightly install --locked cargo-reedme@$CARGO_REEDME_VERSION
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-reedme
+          locked: true
+          version: ${{ env.CARGO_REEDME_VERSION }}
+
       - run: cargo +nightly reedme --check
 
   doc:
@@ -133,7 +138,7 @@ jobs:
         with:
           crate: cargo-all-features
           locked: true
-          version: $CARGO_ALL_FEATURES_VERSION
+          version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features doc --no-deps
 
