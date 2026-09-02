@@ -110,10 +110,17 @@ impl<T> Drop for RcuOldData<T> {
     #[track_caller]
     #[inline]
     fn drop(&mut self) {
-        panic!(
-            "{} can't be dropped since concurrent readers may be using it. it must first be waited for.",
-            std::any::type_name::<Self>()
-        );
+        if !std::thread::panicking() {
+            // if we are not currently panicking, panic to let the user know that he is doing something wrong.
+            panic!(
+                "{} can't be dropped since concurrent readers may be using it. it must first be waited for.",
+                std::any::type_name::<Self>()
+            );
+        } else {
+            // if we are currently panic don't panic again, since this will cause the process to abort.
+            // instead, just leak the value. there's nothing smart for us to do here. we can't free the memory since it may
+            // still be used. we must leak it.
+        }
     }
 }
 
