@@ -86,6 +86,7 @@ fn swap_inside_with() {
                     swap_future.as_mut().poll(&mut cx)
                 }))
                 .unwrap_err();
+                assert!(extract_string_panic_message(err).contains("cannot wait for an rcu grace period while holding rcu read guards on the current thread"));
 
                 // value must not have been dropped
                 let _: String = value.clone();
