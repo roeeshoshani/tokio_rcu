@@ -147,6 +147,7 @@ impl<T> Rcu<T> {
     ///
     /// the usage of the data is limited to the provided closure to prevent it from being used across await points, and to prevent it
     /// from escaping the calling function. this is needed to guarantee correct use of the rcu protected pointer.
+    #[inline(always)]
     pub fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
