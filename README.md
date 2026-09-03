@@ -126,6 +126,28 @@ runtime, and because it already provides hooks which allow me to track quiescent
 this crate currently requires using the `tokio_unstable` configuration of tokio. this is required since the [`on_after_task_poll`]
 hook is currently unstable, and is needed to make this crate work.
 
+## testing
+
+to run the tests, use:
+```bash
+cargo all-features nextest run --release
+```
+
+(NOTE: this requires installing `cargo-all-features` and `cargo-nextest`)
+
+`cargo-nextest` is used since it allows running each test as a separate process, which is important for testing this crate, since
+this crate heavily relies on thread local variables and generally assumes that only a single tokio runtime is used per process.
+
+furthermore, `cargo-all-features` is used to also test the crate under the `small_epoch_id` feature flag, which is for testing mode
+only, and allows testing some internal edge cases of this crate which are extremely hard to reach in the default configuration.
+
+it is also recommended to run the tests in release mode since it increases the probability of being able to find race conditions and
+other hard to catch edge cases.
+
+## license
+
+This project is licensed under the MIT license.
+
 [`on_after_task_poll`]: https://docs.rs/tokio/latest/tokio/runtime/builder/struct.Builder.html#method.on_after_task_poll
 [`RcuPtr`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_ptr/struct.RcuPtr.html
 
