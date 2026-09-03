@@ -1,3 +1,7 @@
+//! an rcu primitive which provides a simple rcu protected pointer to a piece shared data.
+//!
+//! the main type of this module is [`RcuPtr`].
+
 use std::{
     cell::Cell,
     ops::Deref,
@@ -136,6 +140,8 @@ impl<T> Drop for RcuPtrOldData<T> {
 /// the input should be a tuple of the form `(RcuPtrOldData<A>, RcuPtrOldData<B>, ...)`.
 /// supports all tuples with length up to 12.
 ///
+/// # example
+///
 /// ```rust
 /// # use tokio_rcu::{rcu_block_on, rcu_ptr::{RcuPtr, rcu_ptr_wait_multiple}};
 /// # rcu_block_on(async {
@@ -151,6 +157,10 @@ impl<T> Drop for RcuPtrOldData<T> {
 /// assert_eq!(*old_c, 78);
 /// # })
 /// ```
+///
+/// # cancellation safety
+///
+/// function is not cancellation safe. if cancelled, it will leak the pointer and panic.
 pub async fn rcu_ptr_wait_multiple<T: MultipleRcuOldDataInstances>(items: T) -> T::WaitResult {
     items.wait().await
 }
