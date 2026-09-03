@@ -1,4 +1,4 @@
-//! an rcu primitive which provides a simple rcu protected pointer to a piece shared data.
+//! an rcu primitive which provides a simple rcu protected pointer to shared data.
 //!
 //! the main type of this module is [`RcuPtr`].
 
