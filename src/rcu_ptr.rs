@@ -26,7 +26,7 @@ thread_local! {
 ///
 /// this must manually be taken care of by the programmer. incorrect use will lead to undefined behaviour.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct RcuReadGuard<'a, T> {
+pub struct RcuPtrReadGuard<'a, T> {
     value: &'a T,
 
     /// the guard must not be sent as it is associated with thread local state - both the `THIS_THREAD_CUR_NUM_LIVE_GUARDS` increment
@@ -34,14 +34,14 @@ pub struct RcuReadGuard<'a, T> {
     /// stale pointers between one another.
     _phantom: PhantomUnsend,
 }
-impl<'a, T> Deref for RcuReadGuard<'a, T> {
+impl<'a, T> Deref for RcuPtrReadGuard<'a, T> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {
         self.value
     }
 }
-impl<'a, T> Drop for RcuReadGuard<'a, T> {
+impl<'a, T> Drop for RcuPtrReadGuard<'a, T> {
     fn drop(&mut self) {
         THIS_THREAD_CUR_NUM_LIVE_GUARDS.set(
             THIS_THREAD_CUR_NUM_LIVE_GUARDS
@@ -54,17 +54,17 @@ impl<'a, T> Drop for RcuReadGuard<'a, T> {
 
 /// old data of an rcu protected pointer, returned after the pointer was swapped to a new one.
 ///
-/// **this type must not be dropped**, you must call [`wait`](RcuOldData::wait) on it.
+/// **this type must not be dropped**, you must call [`wait`](RcuPtrOldData::wait) on it.
 /// that's because the data can't be freed until we know that all previous readers of this pointer finished using it.
 /// dropping this type without waiting means that old readers may still be using the pointer, so the data can't be freed.
 /// so, dropping this type without waiting for it leaks the pointer and panics.
-pub struct RcuOldData<T> {
+pub struct RcuPtrOldData<T> {
     /// the old data pointer, but make it `Send` and `Sync`.
     /// this is safe since this field is basically just a pointer to a heap allocation, and can thus safely be sent and shared between
     /// threads.
     old_data_ptr: PtrMutSendSync<T>,
 }
-impl<T> RcuOldData<T> {
+impl<T> RcuPtrOldData<T> {
     /// creates a new old data pointer guard.
     ///
     /// # Safety
@@ -101,7 +101,7 @@ impl<T> RcuOldData<T> {
         synchronize_rcu().await;
 
         // SAFETY: all existing readers finished using this pointers, so it is now exclusively ours.
-        // also, pointers are always valid pointers to valid data by the invariants of the `Rcu` type.
+        // also, pointers are always valid pointers to valid data by the invariants of the `RcuPtr` type.
         let res = unsafe { Box::from_raw(self.old_data_ptr.ptr()) };
 
         // this type is not allowed to be dropped, so avoid running its panicking destructor.
@@ -111,7 +111,7 @@ impl<T> RcuOldData<T> {
         res
     }
 }
-impl<T> Drop for RcuOldData<T> {
+impl<T> Drop for RcuPtrOldData<T> {
     #[track_caller]
     #[inline]
     fn drop(&mut self) {
@@ -129,11 +129,104 @@ impl<T> Drop for RcuOldData<T> {
     }
 }
 
+/// given a tuple of [`RcuPtrOldData`] instances with potentially different data types, this function waits for all of them to be reclaimed
+/// at once. this is more efficient than waiting for each of them separately, as it requires only a single rcu grace period for the entire
+/// batch, instead of one grace period per [`RcuPtrOldData`] instance.
+///
+/// the input should be a tuple of the form `(RcuPtrOldData<A>, RcuPtrOldData<B>, ...)`.
+/// supports all tuples with length up to 12.
+///
+/// ```rust
+/// # use tokio_rcu::{rcu_block_on, rcu_ptr::{RcuPtr, rcu_ptr_wait_multiple}};
+/// # rcu_block_on(async {
+/// let rcu_a = RcuPtr::new(Box::new("a"));
+/// let rcu_b = RcuPtr::new(Box::new(vec![1, 2, 3]));
+/// let rcu_c = RcuPtr::new(Box::new(78));
+/// let old_data_a = rcu_a.swap_nowait(Box::new("aaaa"));
+/// let old_data_b = rcu_b.swap_nowait(Box::new(vec![4, 88, 12, 59, 33]));
+/// let old_data_c = rcu_c.swap_nowait(Box::new(9120));
+/// let (old_a, old_b, old_c) = rcu_ptr_wait_multiple((old_data_a, old_data_b, old_data_c)).await;
+/// assert_eq!(*old_a, "a");
+/// assert_eq!(*old_b, vec![1, 2, 3]);
+/// assert_eq!(*old_c, 78);
+/// # })
+/// ```
+pub async fn rcu_ptr_wait_multiple<T: MultipleRcuOldDataInstances>(items: T) -> T::WaitResult {
+    items.wait().await
+}
+
+/// a trait representing a tuple of multiple [`RcuPtrOldData`] instances, each with its own inner data type.
+///
+/// this is implemented for all tuples of the form `(RcuPtrOldData<A>, RcuPtrOldData<B>, ...)` with length up to 12.
+///
+/// used to perform aggregate operations that operate on multiple [`RcuPtrOldData`] instances at once.
+pub trait MultipleRcuOldDataInstances {
+    /// the result of waiting for all of the rcu old data instances at once.
+    /// this is a tuple of the form `(Box<A>, Box<B>, ...)`.
+    type WaitResult;
+
+    /// waits for all of the rcu old data instances at once, returning their owned pointers.
+    fn wait(self) -> impl Future<Output = Self::WaitResult>;
+}
+macro_rules! impl_multiple_rcu_old_data_instances_for_tuple {
+    { $(($index: tt, $t: ident)),+ } => {
+        impl<$($t),+> MultipleRcuOldDataInstances for ($(RcuPtrOldData<$t>),+) {
+            type WaitResult = ($(Box<$t>),+);
+
+            async fn wait(self) -> Self::WaitResult {
+                // make sure that the current thread is not holding any live guards while waiting for all existing users of the pointer.
+                // in theory, users can't achieve this since the can't hold a guard across an await point. but, they can achieve this by
+                // doing weird stuff like calling tokio's `handle.block_on` while holding a read guard on the current thread.
+                // this check prevents such misuse from causing UB, instead converting it to a runtime panic.
+                assert_eq!(
+                    THIS_THREAD_CUR_NUM_LIVE_GUARDS.get(),
+                    0,
+                    "cannot wait for an rcu grace period while holding rcu read guards on the current thread"
+                );
+
+                // wait for all previous readers to stop using the old value
+                synchronize_rcu().await;
+
+                // SAFETY: all existing readers finished using this pointers, so it is now exclusively ours.
+                // also, pointers are always valid pointers to valid data by the invariants of the `RcuPtr` type.
+                let results = unsafe {
+                    ($(
+                        Box::from_raw(self.$index.old_data_ptr.ptr())
+                    ),+)
+                };
+
+                // this type is not allowed to be dropped, so avoid running its panicking destructor.
+                // we are finished doing all cleanup at this point anyway.
+                std::mem::forget(self);
+
+                results
+            }
+        }
+    };
+}
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B) }
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B), (2, C) }
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B), (2, C), (3, D) }
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E) }
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F) }
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G) }
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H) }
+impl_multiple_rcu_old_data_instances_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I) }
+impl_multiple_rcu_old_data_instances_for_tuple! {
+    (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J)
+}
+impl_multiple_rcu_old_data_instances_for_tuple! {
+    (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J), (10, K)
+}
+impl_multiple_rcu_old_data_instances_for_tuple! {
+    (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J), (10, K), (11, L)
+}
+
 /// an rcu protected pointer.
-pub struct Rcu<T> {
+pub struct RcuPtr<T> {
     value_ptr: AtomicPtr<T>,
 }
-impl<T> Rcu<T> {
+impl<T> RcuPtr<T> {
     /// creates a new rcu protected pointer pointing to the given data.
     pub fn new(value: Box<T>) -> Self {
         Self {
@@ -173,7 +266,7 @@ impl<T> Rcu<T> {
     ///
     /// as soon as the future that acquired this read guard gets to a point where it `await`s or finishes execution (basically any
     /// point which voluntarily yields the future), the guard must have already been dropped.
-    pub unsafe fn read(&self) -> RcuReadGuard<'_, T> {
+    pub unsafe fn read(&self) -> RcuPtrReadGuard<'_, T> {
         assert!(
             this_thread_does_have_allocated_storage_slot(),
             "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime"
@@ -193,7 +286,7 @@ impl<T> Rcu<T> {
                 .unwrap(),
         );
 
-        RcuReadGuard {
+        RcuPtrReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
             value: unsafe { &*ptr },
             _phantom: PhantomUnsend::new(),
@@ -202,7 +295,7 @@ impl<T> Rcu<T> {
 
     /// swaps the current value to the new value, and returns a guard containing the old value, which can be owned after waiting
     /// for all previous users of that pointer to finish using it.
-    pub fn swap_nowait(&self, new_value: Box<T>) -> RcuOldData<T> {
+    pub fn swap_nowait(&self, new_value: Box<T>) -> RcuPtrOldData<T> {
         let new_value_ptr = Box::leak(new_value);
 
         let old_value_ptr = self.value_ptr.swap(
@@ -219,7 +312,7 @@ impl<T> Rcu<T> {
         );
 
         // SAFETY: we provide the old pointer after swapping it with a new one.
-        unsafe { RcuOldData::new(old_value_ptr) }
+        unsafe { RcuPtrOldData::new(old_value_ptr) }
     }
 
     /// swaps the current value to the new value, waits for all previous users of the old value to finish using it, and returns an
@@ -232,13 +325,13 @@ impl<T> Rcu<T> {
         self.swap_nowait(new_value).wait().await
     }
 }
-impl<T: Clone> Rcu<T> {
+impl<T: Clone> RcuPtr<T> {
     /// reads the rcu protected pointer and clones the value that it currently points to.
     pub fn read_clone(&self) -> T {
         self.with(|x| x.clone())
     }
 }
-impl<T> Drop for Rcu<T> {
+impl<T> Drop for RcuPtr<T> {
     fn drop(&mut self) {
         let ptr = self.value_ptr.load(
             // we want acquire ordering to make sure that the write to the pointed-at data happens before the
@@ -251,5 +344,5 @@ impl<T> Drop for Rcu<T> {
         let _ = unsafe { Box::from_raw(ptr) };
     }
 }
-unsafe impl<T: Send> Send for Rcu<T> {}
-unsafe impl<T: Sync> Sync for Rcu<T> {}
+unsafe impl<T: Send> Send for RcuPtr<T> {}
+unsafe impl<T: Sync> Sync for RcuPtr<T> {}

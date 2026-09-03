@@ -7,7 +7,7 @@ use std::{
     task::Waker,
 };
 
-use tokio_rcu::{Rcu, rcu_block_on};
+use tokio_rcu::{rcu_block_on, rcu_ptr::RcuPtr};
 
 const USE_OUTSIDE_OF_RCU_ENABLED_RUNTIME_ERR: &str =
     "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime";
@@ -35,20 +35,20 @@ fn assert_panics_with_use_outside_of_rcu_enabled_runtime_err<F: FnOnce() + Unwin
 
 #[test]
 fn read_outside_of_runtime() {
-    let x = Rcu::new(Box::new(String::from("some interesting piece of text")));
+    let x = RcuPtr::new(Box::new(String::from("some interesting piece of text")));
     assert_panics_with_use_outside_of_rcu_enabled_runtime_err(|| x.with(|_| {}));
 }
 
 #[tokio::test]
 async fn read_in_non_rcu_runtime() {
-    let x = Rcu::new(Box::new(String::from("some interesting piece of text")));
+    let x = RcuPtr::new(Box::new(String::from("some interesting piece of text")));
     assert_panics_with_use_outside_of_rcu_enabled_runtime_err(|| x.with(|_| {}));
 }
 
 #[test]
 fn read_from_non_runtime_thread_spawned_inside_runtime() {
     rcu_block_on(async {
-        let x = Rcu::new(Box::new(String::from("some interesting piece of text")));
+        let x = RcuPtr::new(Box::new(String::from("some interesting piece of text")));
         std::thread::spawn(move || {
             assert_panics_with_use_outside_of_rcu_enabled_runtime_err(|| x.with(|_| {}));
         })
@@ -59,7 +59,7 @@ fn read_from_non_runtime_thread_spawned_inside_runtime() {
 
 #[test]
 fn read_from_main_thread_after_runtime_finished() {
-    let x = Arc::new(Rcu::new(Box::new(String::from(
+    let x = Arc::new(RcuPtr::new(Box::new(String::from(
         "some interesting piece of text",
     ))));
     rcu_block_on({
@@ -72,7 +72,7 @@ fn read_from_main_thread_after_runtime_finished() {
 #[test]
 fn swap_inside_with() {
     rcu_block_on(async {
-        let rcu_ptr = Arc::new(Rcu::new(Box::new(String::from(
+        let rcu_ptr = Arc::new(RcuPtr::new(Box::new(String::from(
             "some interesting piece of text",
         ))));
         rcu_ptr.with({

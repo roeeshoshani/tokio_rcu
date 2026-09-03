@@ -7,11 +7,11 @@
 //! linux kernel - it waits for an rcu grace period, which allows writers to track when exactly they can reclaim swapped out data.
 //!
 //! the [`synchronize_rcu`] primitive can be used to build a bunch of data structures and primitives.
-//! the simplest primitive - a single pointer to shared data - is implemented in this crate by the [`Rcu`] type.
+//! the simplest primitive - a single pointer to shared data - is implemented in this crate by the [`RcuPtr`] type.
 //!
 //! # performance
 //!
-//! NOTE: this section specifically refers to [`Rcu`], the main high level primitive provided by this crate, but will probably also
+//! NOTE: this section specifically refers to [`RcuPtr`], the main high level primitive provided by this crate, but will probably also
 //! apply to most other primitives which can be implemented using this crate.
 //!
 //! this crate is speicifcally useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
@@ -31,11 +31,11 @@
 //! # quick start
 //!
 //! ```rust
-//! use tokio_rcu::{Rcu, rcu_block_on};
+//! use tokio_rcu::{rcu_block_on, rcu_ptr::RcuPtr};
 //!
 //! fn main() {
 //!     rcu_block_on(async move {
-//!         let numbers = Rcu::new(Box::new(vec![1, 2, 3, 4]));
+//!         let numbers = RcuPtr::new(Box::new(vec![1, 2, 3, 4]));
 //!
 //!         // rcu protected values can be accessed using the `with` function.
 //!         numbers.with(|numbers| {
@@ -118,6 +118,7 @@
 //! hook is currently unstable, and is needed to make this crate work.
 //!
 //! [`on_after_task_poll`]: tokio::runtime::Builder::on_after_task_poll
+//! [`RcuPtr`]: rcu_ptr::RcuPtr
 use std::{sync::atomic, task::Poll};
 
 use crate::{
@@ -136,11 +137,10 @@ mod epoch;
 mod membarrier;
 mod notify;
 mod per_thread_storage;
-mod rcu;
+pub mod rcu_ptr;
 mod thread_state;
 mod utils;
 
-pub use rcu::{Rcu, RcuReadGuard};
 use tokio::runtime::RuntimeFlavor;
 
 /// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful

@@ -1,6 +1,6 @@
 use std::{hint::black_box, sync::Arc, time::Duration};
 
-use tokio_rcu::{Rcu, TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on};
+use tokio_rcu::{TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_ptr::RcuPtr};
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu protected pointer.
 #[test]
@@ -14,7 +14,7 @@ fn no_uaf_during_stress() {
         let initial_string = "<VALID> initial string";
         let final_string = "<VALID> final string";
 
-        let data = Arc::new(Rcu::new(Box::new(String::from(initial_string))));
+        let data = Arc::new(RcuPtr::new(Box::new(String::from(initial_string))));
         let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
             .map(|_| {
                 tokio::spawn({
@@ -118,7 +118,7 @@ fn no_uaf_with_sleeps() {
             let initial_string = "<VALID> initial string";
             let final_string = "<VALID> final string";
 
-            let data = Arc::new(Rcu::new(Box::new(String::from(initial_string))));
+            let data = Arc::new(RcuPtr::new(Box::new(String::from(initial_string))));
             let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
                 .map(|_| {
                     tokio::spawn({
@@ -209,7 +209,9 @@ fn enable_rcu_multiple_calls() {
     unsafe {
         // SAFETY: we called `enable_rcu`
         rt.rcu_block_on(async move {
-            let state = Arc::new(Rcu::new(Box::new(String::from("some interesting string"))));
+            let state = Arc::new(RcuPtr::new(Box::new(String::from(
+                "some interesting string",
+            ))));
             let reader = tokio::spawn({
                 let state = state.clone();
                 async move {
@@ -253,7 +255,9 @@ fn enable_rcu_multiple_runtimes() {
     };
 
     let logic = || async move {
-        let state = Arc::new(Rcu::new(Box::new(String::from("some interesting string"))));
+        let state = Arc::new(RcuPtr::new(Box::new(String::from(
+            "some interesting string",
+        ))));
         let reader = tokio::spawn({
             let state = state.clone();
             async move {
@@ -305,7 +309,7 @@ fn double_buffering() {
             should_readers_exit: false,
         });
 
-        let data = Arc::new(Rcu::new(buf_a));
+        let data = Arc::new(RcuPtr::new(buf_a));
 
         let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
             .map(|_| {
