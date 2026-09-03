@@ -2,6 +2,7 @@
 name = "tokio_rcu"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
 
 [dependencies]
 index_type = "0.7.1"

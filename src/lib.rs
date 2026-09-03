@@ -122,6 +122,10 @@
 //! this crate currently requires using the `tokio_unstable` configuration of tokio. this is required since the [`on_after_task_poll`]
 //! hook is currently unstable, and is needed to make this crate work.
 //!
+//! # License
+//!
+//! This project is licensed under the MIT license.
+//!
 //! [`on_after_task_poll`]: tokio::runtime::Builder::on_after_task_poll
 //! [`RcuPtr`]: rcu_ptr::RcuPtr
 use std::{sync::atomic, task::Poll};
