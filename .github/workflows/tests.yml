@@ -60,6 +60,7 @@ jobs:
           version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features nextest run --release
+      - run: cargo all-features test --doc --release
 
   tests-debug-mode:
     strategy:
@@ -83,6 +84,7 @@ jobs:
           version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features nextest run
+      - run: cargo all-features test --doc
 
   fmt:
     runs-on: ubuntu-latest

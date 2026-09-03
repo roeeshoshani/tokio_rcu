@@ -131,12 +131,18 @@ hook is currently unstable, and is needed to make this crate work.
 to run the tests, use:
 ```bash
 cargo all-features nextest run --release
+cargo all-features test --doc --release
 ```
 
 (NOTE: this requires installing `cargo-all-features` and `cargo-nextest`)
 
 `cargo-nextest` is used since it allows running each test as a separate process, which is important for testing this crate, since
 this crate heavily relies on thread local variables and generally assumes that only a single tokio runtime is used per process.
+furthermore, bugs in the rcu primitives can cause UAFs which may crash the process. if the process crashes when using `cargo test`,
+all tests stop running and no diagnostics are reported. with `cargo-nextest`, such failures are gracefully reported as test failures.
+
+sadly, `cargo-nextest` currently does not support running doctests, so we must run them separately. note that `cargo test --doc`
+already runs each test in its own process, so luckily for us, we don't need `cargo-nextest` for process isolation in this case.
 
 furthermore, `cargo-all-features` is used to also test the crate under the `small_epoch_id` feature flag, which is for testing mode
 only, and allows testing some internal edge cases of this crate which are extremely hard to reach in the default configuration.
