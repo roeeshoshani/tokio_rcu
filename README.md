@@ -11,11 +11,11 @@ the core primitive provided by this crate is [`synchronize_rcu`](https://docs.rs
 linux kernel - it waits for an rcu grace period, which allows writers to track when exactly they can reclaim swapped out data.
 
 the [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/fn.synchronize_rcu.html) primitive can be used to build a bunch of data structures and primitives.
-the simplest primitive - a single pointer to shared data - is implemented in this crate by the [`Rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu/struct.Rcu.html) type.
+the simplest primitive - a single pointer to shared data - is implemented in this crate by the [`RcuPtr`] type.
 
 ## performance
 
-NOTE: this section specifically refers to [`Rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu/struct.Rcu.html), the main high level primitive provided by this crate, but will probably also
+NOTE: this section specifically refers to [`RcuPtr`], the main high level primitive provided by this crate, but will probably also
 apply to most other primitives which can be implemented using this crate.
 
 this crate is speicifcally useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
@@ -35,11 +35,11 @@ to it, but this is mostly negligible.
 ## quick start
 
 ```rust
-use tokio_rcu::{Rcu, rcu_block_on};
+use tokio_rcu::{rcu_block_on, rcu_ptr::RcuPtr};
 
 fn main() {
     rcu_block_on(async move {
-        let numbers = Rcu::new(Box::new(vec![1, 2, 3, 4]));
+        let numbers = RcuPtr::new(Box::new(vec![1, 2, 3, 4]));
 
         // rcu protected values can be accessed using the `with` function.
         numbers.with(|numbers| {
@@ -122,5 +122,6 @@ this crate currently requires using the `tokio_unstable` configuration of tokio.
 hook is currently unstable, and is needed to make this crate work.
 
 [`on_after_task_poll`]: https://docs.rs/tokio/latest/tokio/runtime/builder/struct.Builder.html#method.on_after_task_poll
+[`RcuPtr`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_ptr/struct.RcuPtr.html
 
 <!-- cargo-rdme end -->
