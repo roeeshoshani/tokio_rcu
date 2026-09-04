@@ -150,6 +150,15 @@ only, and allows testing some internal edge cases of this crate which are extrem
 it is also recommended to run the tests in release mode since it increases the probability of being able to find race conditions and
 other hard to catch edge cases.
 
+## platform support
+
+currently, this crate only works on linux and windows.
+
+the limitation stems from the membarrier operation, which is currently only implemented for linux (using the membarrier syscall),
+and windows (using FlushProcessWriteBuffers).
+
+more platforms can be added in the future if needed, and given that they have a way to emulate the behaviour of membarrier.
+
 ## license
 
 This project is licensed under the MIT license.
