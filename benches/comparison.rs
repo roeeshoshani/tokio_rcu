@@ -336,3 +336,61 @@ fn bench_rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
         }
     });
 }
+
+#[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
+fn bench_arc_swap_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
+    rcu_block_on(async move {
+        let data = Arc::new(ArcSwap::new(Arc::new(0)));
+        let writers: Vec<_> = (0..cfg.num_reader_tasks)
+            .map({
+                let data = data.clone();
+                move |_| {
+                    tokio::spawn({
+                        let data = data.clone();
+                        async move {
+                            let mut cur_owned_data = Arc::new(0);
+                            for _ in 0..NUM_WRITE_ITERATIONS {
+                                for _ in 0..NUM_WRITES_PER_ITERATION {
+                                    cur_owned_data = data.swap(cur_owned_data);
+                                }
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                    })
+                }
+            })
+            .collect();
+
+        let should_readers_stop = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..cfg.num_writer_tasks)
+            .map({
+                let data = data.clone();
+                let should_readers_stop = should_readers_stop.clone();
+                move |_| {
+                    tokio::spawn({
+                        let data = data.clone();
+                        let should_readers_stop = should_readers_stop.clone();
+                        async move {
+                            while !should_readers_stop.load(atomic::Ordering::Relaxed) {
+                                for _ in 0..NUM_READS_PER_ITERATION {
+                                    black_box(data.load());
+                                }
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                    })
+                }
+            })
+            .collect();
+
+        for task in writers {
+            task.await.unwrap();
+        }
+
+        should_readers_stop.store(true, atomic::Ordering::Relaxed);
+
+        for task in readers {
+            task.await.unwrap();
+        }
+    });
+}
