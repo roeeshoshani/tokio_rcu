@@ -87,6 +87,14 @@ const READ_WHILE_WRITING_BENCH_CFGS: &[ReadWhileWritingBenchCfg] = &[
         num_writer_tasks: 2,
     },
     ReadWhileWritingBenchCfg {
+        num_reader_tasks: 16,
+        num_writer_tasks: 1,
+    },
+    ReadWhileWritingBenchCfg {
+        num_reader_tasks: 16,
+        num_writer_tasks: 2,
+    },
+    ReadWhileWritingBenchCfg {
         num_reader_tasks: 32,
         num_writer_tasks: 1,
     },
@@ -195,6 +203,7 @@ fn bench_arc_swap_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
                             let mut cur_owned_data = Arc::new(0);
                             while !should_writers_stop.load(atomic::Ordering::Relaxed) {
                                 cur_owned_data = data.swap(cur_owned_data);
+                                tokio::task::yield_now().await;
                             }
                         }
                     })
