@@ -33,7 +33,9 @@ fn rcu_ptr_read_only(num_tasks: usize) {
                     async move {
                         for _ in 0..NUM_READ_ITERATIONS {
                             for _ in 0..NUM_READS_PER_ITERATION {
-                                black_box(data.with(|_| {}))
+                                data.with(|x| {
+                                    black_box(*x);
+                                });
                             }
                             tokio::task::yield_now().await;
                         }
@@ -138,7 +140,9 @@ fn rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
                         async move {
                             for _ in 0..NUM_READ_ITERATIONS {
                                 for _ in 0..NUM_READS_PER_ITERATION {
-                                    black_box(data.with(|_| {}))
+                                    data.with(|x| {
+                                        black_box(*x);
+                                    });
                                 }
                                 tokio::task::yield_now().await;
                             }
@@ -334,7 +338,9 @@ fn rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
                         async move {
                             while !should_readers_stop.load(atomic::Ordering::Relaxed) {
                                 for _ in 0..NUM_READS_PER_ITERATION {
-                                    black_box(data.with(|_| {}))
+                                    data.with(|x| {
+                                        black_box(*x);
+                                    });
                                 }
                                 tokio::task::yield_now().await;
                             }
