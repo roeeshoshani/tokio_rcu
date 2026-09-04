@@ -36,6 +36,8 @@ specifically a writer can slightly delay this load due to invalidating the cache
 to it, but this is mostly negligible.
 this can be very important in latency-critical applications which require a high-performance fast path with predictable latency.
 
+also see [benchmnarks](#benchmarks).
+
 ## quick start
 
 ```rust
