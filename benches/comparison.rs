@@ -148,6 +148,7 @@ fn bench_rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
                             let mut cur_owned_data = Box::new(0);
                             while !should_writers_stop.load(atomic::Ordering::Relaxed) {
                                 cur_owned_data = data.swap(cur_owned_data).await;
+                                tokio::task::yield_now().await;
                             }
                         }
                     })
