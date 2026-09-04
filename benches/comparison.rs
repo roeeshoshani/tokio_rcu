@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     hint::black_box,
     sync::{
         Arc,
@@ -22,7 +23,7 @@ const NUM_WRITE_ITERATIONS: usize = 8;
 const READ_ONLY_BENCH_NUM_TASKS_ARGS: &[usize] = &[1, 8, 16, 32, 64];
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
-fn bench_rcu_ptr_read_only(num_tasks: usize) {
+fn rcu_ptr_read_only(num_tasks: usize) {
     rcu_block_on(async move {
         let data = Arc::new(RcuPtr::new(Box::new(0)));
         let tasks: Vec<_> = (0..num_tasks)
@@ -47,7 +48,7 @@ fn bench_rcu_ptr_read_only(num_tasks: usize) {
 }
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
-fn bench_arc_swap_read_only(num_tasks: usize) {
+fn arc_swap_read_only(num_tasks: usize) {
     rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let tasks: Vec<_> = (0..num_tasks)
@@ -75,6 +76,15 @@ fn bench_arc_swap_read_only(num_tasks: usize) {
 struct ReadWhileWritingBenchCfg {
     num_reader_tasks: usize,
     num_writer_tasks: usize,
+}
+impl Display for ReadWhileWritingBenchCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} reader tasks, {} writer tasks",
+            self.num_reader_tasks, self.num_writer_tasks
+        )
+    }
 }
 const READ_WHILE_WRITING_BENCH_CFGS: &[ReadWhileWritingBenchCfg] = &[
     ReadWhileWritingBenchCfg {
@@ -116,7 +126,7 @@ const READ_WHILE_WRITING_BENCH_CFGS: &[ReadWhileWritingBenchCfg] = &[
 ];
 
 #[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
-fn bench_rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
+fn rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(RcuPtr::new(Box::new(0)));
         let readers: Vec<_> = (0..cfg.num_reader_tasks)
@@ -172,7 +182,7 @@ fn bench_rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
 }
 
 #[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
-fn bench_arc_swap_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
+fn arc_swap_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let readers: Vec<_> = (0..cfg.num_reader_tasks)
@@ -232,6 +242,15 @@ struct WriteWhileReadingBenchCfg {
     num_reader_tasks: usize,
     num_writer_tasks: usize,
 }
+impl Display for WriteWhileReadingBenchCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} reader tasks, {} writer tasks",
+            self.num_reader_tasks, self.num_writer_tasks
+        )
+    }
+}
 const WRITE_WHILE_READING_BENCH_CFGS: &[WriteWhileReadingBenchCfg] = &[
     WriteWhileReadingBenchCfg {
         num_reader_tasks: 1,
@@ -280,7 +299,7 @@ const WRITE_WHILE_READING_BENCH_CFGS: &[WriteWhileReadingBenchCfg] = &[
 ];
 
 #[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
-fn bench_rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
+fn rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(RcuPtr::new(Box::new(0)));
         let writers: Vec<_> = (0..cfg.num_reader_tasks)
@@ -338,7 +357,7 @@ fn bench_rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
 }
 
 #[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
-fn bench_arc_swap_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
+fn arc_swap_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let writers: Vec<_> = (0..cfg.num_reader_tasks)
