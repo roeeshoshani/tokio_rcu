@@ -21,6 +21,8 @@ libc = "0.2.189"
 windows = { version = "0.62.2", features = ["Win32_System_Threading"] }
 
 [dev-dependencies]
+arc-swap = "1.9.2"
+divan = "0.1.21"
 tokio = { version = "1.53.1", features = ["full"] }
 
 [features]
@@ -29,3 +31,6 @@ tokio = { version = "1.53.1", features = ["full"] }
 # this is used to check that the code for dealing with the overflow of the epoch id works properly.
 small_epoch_id = []
 
+[[bench]]
+name = "comparison"
+harness = false

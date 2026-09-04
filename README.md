@@ -126,6 +126,96 @@ runtime, and because it already provides hooks which allow me to track quiescent
 this crate currently requires using the `tokio_unstable` configuration of tokio. this is required since the [`on_after_task_poll`]
 hook is currently unstable, and is needed to make this crate work.
 
+## benchmarks
+
+to run the benchmarks, use:
+```bash
+cargo bench
+```
+
+the benchmarks mostly compare this crate with the `arc_swap` crate, which solves the same problem in a different way and provides
+a very similar interface.
+
+here are the results of running the benchmarks on my 20-core `12th Gen Intel(R) Core(TM) i7-12700` cpu:
+```text
+Timer precision: 40 ns
+comparison                              fastest       │ slowest       │ median        │ mean          │ samples │ iters
+├─ arc_swap_read_only                                 │               │               │               │         │
+│  ├─ 1                                 21.68 ms      │ 32.75 ms      │ 22.53 ms      │ 23.69 ms      │ 100     │ 100
+│  ├─ 8                                 23.73 ms      │ 49.89 ms      │ 29.11 ms      │ 30.15 ms      │ 100     │ 100
+│  ├─ 16                                39.49 ms      │ 44.63 ms      │ 43.61 ms      │ 42.87 ms      │ 100     │ 100
+│  ├─ 32                                65.75 ms      │ 81.64 ms      │ 68.5 ms       │ 69.41 ms      │ 100     │ 100
+│  ╰─ 64                                129.5 ms      │ 137.9 ms      │ 132.6 ms      │ 132.5 ms      │ 100     │ 100
+├─ rcu_ptr_read_only                                  │               │               │               │         │
+│  ├─ 1                                 7.322 ms      │ 28.86 ms      │ 11.49 ms      │ 13.23 ms      │ 100     │ 100
+│  ├─ 8                                 8.782 ms      │ 15.87 ms      │ 9.6 ms        │ 10.24 ms      │ 100     │ 100
+│  ├─ 16                                10.04 ms      │ 16.07 ms      │ 10.48 ms      │ 10.59 ms      │ 100     │ 100
+│  ├─ 32                                16.04 ms      │ 20.69 ms      │ 16.69 ms      │ 17.5 ms       │ 100     │ 100
+│  ╰─ 64                                31.18 ms      │ 38.09 ms      │ 32.9 ms       │ 33.63 ms      │ 100     │ 100
+├─ arc_swap_read_while_writing                        │               │               │               │         │
+│  ├─ 1 reader tasks, 1 writer tasks    24.7 ms       │ 33.48 ms      │ 26.03 ms      │ 26.49 ms      │ 100     │ 100
+│  ├─ 8 reader tasks, 1 writer tasks    30.04 ms      │ 43.33 ms      │ 33.75 ms      │ 34.59 ms      │ 100     │ 100
+│  ├─ 8 reader tasks, 2 writer tasks    34.77 ms      │ 50.08 ms      │ 38.08 ms      │ 38.96 ms      │ 100     │ 100
+│  ├─ 16 reader tasks, 1 writer tasks   48.31 ms      │ 59.53 ms      │ 54.27 ms      │ 54 ms         │ 100     │ 100
+│  ├─ 16 reader tasks, 2 writer tasks   54.81 ms      │ 74.05 ms      │ 65.95 ms      │ 64.88 ms      │ 100     │ 100
+│  ├─ 32 reader tasks, 1 writer tasks   67.09 ms      │ 87.9 ms       │ 69.57 ms      │ 71.65 ms      │ 100     │ 100
+│  ├─ 32 reader tasks, 2 writer tasks   68.71 ms      │ 85.48 ms      │ 73.15 ms      │ 74.21 ms      │ 100     │ 100
+│  ├─ 64 reader tasks, 1 writer tasks   130.2 ms      │ 140.5 ms      │ 134.1 ms      │ 134 ms        │ 100     │ 100
+│  ╰─ 64 reader tasks, 2 writer tasks   131 ms        │ 145.5 ms      │ 136 ms        │ 136 ms        │ 100     │ 100
+├─ rcu_ptr_read_while_writing                         │               │               │               │         │
+│  ├─ 1 reader tasks, 1 writer tasks    7.907 ms      │ 12.98 ms      │ 8.422 ms      │ 8.755 ms      │ 100     │ 100
+│  ├─ 8 reader tasks, 1 writer tasks    9.129 ms      │ 17.74 ms      │ 10 ms         │ 10.26 ms      │ 100     │ 100
+│  ├─ 8 reader tasks, 2 writer tasks    9.387 ms      │ 12.91 ms      │ 10.03 ms      │ 10.23 ms      │ 100     │ 100
+│  ├─ 16 reader tasks, 1 writer tasks   11 ms         │ 14.48 ms      │ 11.16 ms      │ 11.31 ms      │ 100     │ 100
+│  ├─ 16 reader tasks, 2 writer tasks   11.21 ms      │ 13.17 ms      │ 11.37 ms      │ 11.5 ms       │ 100     │ 100
+│  ├─ 32 reader tasks, 1 writer tasks   17.22 ms      │ 22.5 ms       │ 17.78 ms      │ 18.6 ms       │ 100     │ 100
+│  ├─ 32 reader tasks, 2 writer tasks   17.19 ms      │ 22.42 ms      │ 18.16 ms      │ 18.85 ms      │ 100     │ 100
+│  ├─ 64 reader tasks, 1 writer tasks   33.22 ms      │ 38.55 ms      │ 34.12 ms      │ 35.01 ms      │ 100     │ 100
+│  ╰─ 64 reader tasks, 2 writer tasks   33.38 ms      │ 38.62 ms      │ 34.79 ms      │ 35.45 ms      │ 100     │ 100
+├─ arc_swap_write_while_reading                       │               │               │               │         │
+│  ├─ 1 reader tasks, 1 writer tasks    455.3 µs      │ 852.4 µs      │ 517.6 µs      │ 565.2 µs      │ 100     │ 100
+│  ├─ 1 reader tasks, 8 writer tasks    558.8 µs      │ 3.202 ms      │ 814.3 µs      │ 900.5 µs      │ 100     │ 100
+│  ├─ 1 reader tasks, 16 writer tasks   746.1 µs      │ 2.984 ms      │ 1.567 ms      │ 1.584 ms      │ 100     │ 100
+│  ├─ 1 reader tasks, 32 writer tasks   1.304 ms      │ 6.793 ms      │ 3.76 ms       │ 3.352 ms      │ 100     │ 100
+│  ├─ 1 reader tasks, 64 writer tasks   1.634 ms      │ 10.09 ms      │ 4.119 ms      │ 4.971 ms      │ 100     │ 100
+│  ├─ 2 reader tasks, 2 writer tasks    468.9 µs      │ 917.3 µs      │ 617.7 µs      │ 637.6 µs      │ 100     │ 100
+│  ├─ 4 reader tasks, 8 writer tasks    742.1 µs      │ 3.01 ms       │ 1.525 ms      │ 1.48 ms       │ 100     │ 100
+│  ├─ 8 reader tasks, 8 writer tasks    970.5 µs      │ 3.635 ms      │ 1.915 ms      │ 1.986 ms      │ 100     │ 100
+│  ├─ 16 reader tasks, 16 writer tasks  1.903 ms      │ 5.748 ms      │ 2.21 ms       │ 2.576 ms      │ 100     │ 100
+│  ├─ 32 reader tasks, 32 writer tasks  4.504 ms      │ 10.46 ms      │ 6.464 ms      │ 6.322 ms      │ 100     │ 100
+│  ╰─ 64 reader tasks, 64 writer tasks  10.1 ms       │ 18.84 ms      │ 12.01 ms      │ 12.27 ms      │ 100     │ 100
+╰─ rcu_ptr_write_while_reading                        │               │               │               │         │
+   ├─ 1 reader tasks, 1 writer tasks    818.2 µs      │ 3.266 ms      │ 1.275 ms      │ 1.458 ms      │ 100     │ 100
+   ├─ 1 reader tasks, 8 writer tasks    2.283 ms      │ 11.61 ms      │ 2.724 ms      │ 3.751 ms      │ 100     │ 100
+   ├─ 1 reader tasks, 16 writer tasks   2.801 ms      │ 7.454 ms      │ 2.966 ms      │ 3.294 ms      │ 100     │ 100
+   ├─ 1 reader tasks, 32 writer tasks   3.042 ms      │ 199 ms        │ 3.792 ms      │ 34.18 ms      │ 100     │ 100
+   ├─ 1 reader tasks, 64 writer tasks   3.328 ms      │ 199.2 ms      │ 6.99 ms       │ 53.64 ms      │ 100     │ 100
+   ├─ 2 reader tasks, 2 writer tasks    1.769 ms      │ 3.773 ms      │ 2.059 ms      │ 2.097 ms      │ 100     │ 100
+   ├─ 4 reader tasks, 8 writer tasks    2.543 ms      │ 11.66 ms      │ 3.055 ms      │ 3.992 ms      │ 100     │ 100
+   ├─ 8 reader tasks, 8 writer tasks    3.249 ms      │ 6.313 ms      │ 3.452 ms      │ 3.606 ms      │ 100     │ 100
+   ├─ 16 reader tasks, 16 writer tasks  5.776 ms      │ 10.99 ms      │ 6.268 ms      │ 6.458 ms      │ 100     │ 100
+   ├─ 32 reader tasks, 32 writer tasks  10.09 ms      │ 16.99 ms      │ 12.66 ms      │ 12.29 ms      │ 100     │ 100
+   ╰─ 64 reader tasks, 64 writer tasks  15.13 ms      │ 67.13 ms      │ 18.01 ms      │ 18.84 ms      │ 100     │ 100
+```
+
+as you can see, `tokio_rcu`'s reads are faster than `arc_swap`'s reads (about 3x faster on average), while `tokio_rcu`'s writes
+are slower than `arc_swap`'s writes (about 3x times slower on average). for a read-heavy situation, this is ideal.
+
+furthermore, note that when using `arc_swap`, the time it takes for a single read operation seems to scale with the number of
+concurrent readers (see the results of the `arc_swap_read_only` and `arc_swap_read_while_writing` benchmarks), while `tokio_rcu`'s
+read operation takes roughly the same amount of time regardless of the number of concurrent readers, up until the point where there
+are more readers than cpu cores (more than 20 reader tasks), at which point the readers start sharing cpu cores and competing for
+their runtime, which obviously takes its toll on the performance.
+
+also note that this constant time for the read operation holds even when writers are concurrently modifying the data - the time
+spent on a single read operation remains roughly the same (see `rcu_ptr_read_while_writing`), unlike `arc_swap` (see
+`arc_swap_read_while_writing`).
+
+moreover, while `tokio_rcu`'s writes are slower, it is mostly because the writers are sleeping while waiting for other threads to
+pass through a quiescent state, so they are not slower in the sense that they perform more cpu-bound work, only the total time it
+takes for a swap operation to complete after fully awaiting it. in practice the writes may actually spend less cpu time than
+`arc_swap`'s write.
+
 ## testing
 
 to run the tests, use:
