@@ -16,6 +16,9 @@ fn main() {
 const NUM_READS_PER_ITERATION: usize = 8192;
 const NUM_READ_ITERATIONS: usize = 256;
 
+const NUM_WRITES_PER_ITERATION: usize = 8;
+const NUM_WRITE_ITERATIONS: usize = 8;
+
 const READ_ONLY_BENCH_NUM_TASKS_ARGS: &[usize] = &[1, 8, 16, 32, 64];
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
@@ -219,6 +222,116 @@ fn bench_arc_swap_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
         should_writers_stop.store(true, atomic::Ordering::Relaxed);
 
         for task in writers {
+            task.await.unwrap();
+        }
+    });
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+struct WriteWhileReadingBenchCfg {
+    num_reader_tasks: usize,
+    num_writer_tasks: usize,
+}
+const WRITE_WHILE_READING_BENCH_CFGS: &[WriteWhileReadingBenchCfg] = &[
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 1,
+        num_writer_tasks: 1,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 2,
+        num_writer_tasks: 2,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 8,
+        num_writer_tasks: 8,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 4,
+        num_writer_tasks: 8,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 1,
+        num_writer_tasks: 8,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 16,
+        num_writer_tasks: 16,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 1,
+        num_writer_tasks: 16,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 32,
+        num_writer_tasks: 32,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 1,
+        num_writer_tasks: 32,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 64,
+        num_writer_tasks: 64,
+    },
+    WriteWhileReadingBenchCfg {
+        num_reader_tasks: 1,
+        num_writer_tasks: 64,
+    },
+];
+
+#[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
+fn bench_rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
+    rcu_block_on(async move {
+        let data = Arc::new(RcuPtr::new(Box::new(0)));
+        let writers: Vec<_> = (0..cfg.num_reader_tasks)
+            .map({
+                let data = data.clone();
+                move |_| {
+                    tokio::spawn({
+                        let data = data.clone();
+                        async move {
+                            let mut cur_owned_data = Box::new(0);
+                            for _ in 0..NUM_WRITE_ITERATIONS {
+                                for _ in 0..NUM_WRITES_PER_ITERATION {
+                                    cur_owned_data = data.swap(cur_owned_data).await;
+                                }
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                    })
+                }
+            })
+            .collect();
+
+        let should_readers_stop = Arc::new(AtomicBool::new(false));
+        let readers: Vec<_> = (0..cfg.num_writer_tasks)
+            .map({
+                let data = data.clone();
+                let should_readers_stop = should_readers_stop.clone();
+                move |_| {
+                    tokio::spawn({
+                        let data = data.clone();
+                        let should_readers_stop = should_readers_stop.clone();
+                        async move {
+                            while !should_readers_stop.load(atomic::Ordering::Relaxed) {
+                                for _ in 0..NUM_READS_PER_ITERATION {
+                                    black_box(data.with(|_| {}))
+                                }
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                    })
+                }
+            })
+            .collect();
+
+        for task in writers {
+            task.await.unwrap();
+        }
+
+        should_readers_stop.store(true, atomic::Ordering::Relaxed);
+
+        for task in readers {
             task.await.unwrap();
         }
     });
