@@ -208,6 +208,11 @@
 //! spent on a single read operation remains roughly the same (see `rcu_ptr_read_while_writing`), unlike `arc_swap` (see
 //! `arc_swap_read_while_writing`).
 //!
+//! moreover, while `tokio_rcu`'s writes are slower, it is mostly because the writers are sleeping while waiting for other threads to
+//! pass through a quiescent state, so they are not slower in the sense that they perform more cpu-bound work, only the total time it
+//! takes for a swap operation to complete after fully awaiting it. in practice the writes may actually spend less cpu time than
+//! `arc_swap`'s write.
+//!
 //! # testing
 //!
 //! to run the tests, use:
