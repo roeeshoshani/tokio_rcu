@@ -158,3 +158,58 @@ fn bench_rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
         }
     });
 }
+
+#[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
+fn bench_arc_swap_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
+    rcu_block_on(async move {
+        let data = Arc::new(ArcSwap::new(Arc::new(0)));
+        let readers: Vec<_> = (0..cfg.num_reader_tasks)
+            .map({
+                let data = data.clone();
+                move |_| {
+                    tokio::spawn({
+                        let data = data.clone();
+                        async move {
+                            for _ in 0..NUM_READ_ITERATIONS {
+                                for _ in 0..NUM_READS_PER_ITERATION {
+                                    black_box(data.load());
+                                }
+                                tokio::task::yield_now().await;
+                            }
+                        }
+                    })
+                }
+            })
+            .collect();
+
+        let should_writers_stop = Arc::new(AtomicBool::new(false));
+        let writers: Vec<_> = (0..cfg.num_writer_tasks)
+            .map({
+                let data = data.clone();
+                let should_writers_stop = should_writers_stop.clone();
+                move |_| {
+                    tokio::spawn({
+                        let data = data.clone();
+                        let should_writers_stop = should_writers_stop.clone();
+                        async move {
+                            let mut cur_owned_data = Arc::new(0);
+                            while !should_writers_stop.load(atomic::Ordering::Relaxed) {
+                                cur_owned_data = data.swap(cur_owned_data);
+                            }
+                        }
+                    })
+                }
+            })
+            .collect();
+
+        for task in readers {
+            task.await.unwrap();
+        }
+
+        should_writers_stop.store(true, atomic::Ordering::Relaxed);
+
+        for task in writers {
+            task.await.unwrap();
+        }
+    });
+}
