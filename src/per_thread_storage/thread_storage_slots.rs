@@ -78,8 +78,10 @@ impl ThreadStorageSlots {
         let _swap_data_guard = self.swap_data_atomicity_lock.read();
         if self.cur_data_refcnt.fetch_add(
             1,
-            // TODO: ordering
-            atomic::Ordering::Relaxed,
+            // use acquire ordering to make sure that every operation that actually uses the data happens after this increment,
+            // since only after this increment, it is guaranteed that we can use the data.
+            // it is also trivial to see why this is an "acquire" operation, semantically speaking.
+            atomic::Ordering::Acquire,
         ) == usize::MAX
         {
             panic!("refcount overflow");
@@ -118,8 +120,10 @@ impl ThreadStorageSlots {
         // wait for all existing readers to finish.
         // we use spinning since readers should be fast and should not block.
         while self.cur_data_refcnt.load(
-            // TODO: ordering
-            atomic::Ordering::Relaxed,
+            // use acquire ordering to make sure that we see all operations performed by the readers as happens before their final
+            // store to the refcount. this guarantees that past this point, it is properly guaranteed that the readers no longer use
+            // the data, all of their uses happen before this load.
+            atomic::Ordering::Acquire,
         ) != 0
         {
             std::hint::spin_loop();
@@ -294,9 +298,9 @@ impl<'a> Drop for ThreadStorageSlotsReadGuard<'a> {
     fn drop(&mut self) {
         self.origin.cur_data_refcnt.fetch_sub(
             1,
-            // TODO: ordering
-            // probably at least release ordering here to make sure all previous operations are finished.
-            atomic::Ordering::Relaxed,
+            // use release ordering to make sure that all previous operations happen before this final store.
+            // it is also trivial to see why this is a "release" operation, semantically speaking.
+            atomic::Ordering::Release,
         );
     }
 }
