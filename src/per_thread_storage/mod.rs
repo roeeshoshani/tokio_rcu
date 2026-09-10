@@ -3,14 +3,22 @@
 //! usually, for representing thread local state, [`thread_local!`] is used.
 //! but, for the thread state we need the ability to iterate over the thread local state value of all currently registered threads.
 //! this is not possible with [`thread_local!`], so we manually implement that mechanism.
-use std::{cell::Cell, num::NonZeroU16, sync::atomic};
+use std::{
+    cell::{Cell, UnsafeCell},
+    num::NonZeroU16,
+    ops::Deref,
+    ptr::{NonNull, null_mut},
+    sync::atomic::{self, AtomicUsize},
+};
 
-use index_type::{IndexType, array::TypedArray};
+use index_type::{IndexType, array::TypedArray, slice::TypedSlice, typed_vec, vec::TypedVec};
 
 use crate::{
     atomic_type::Atomic,
     thread_state::{EncodedThreadState, ThreadState},
 };
+
+mod thread_storage_slots;
 
 /// the maximum number of concurrent tokio worker threads.
 ///

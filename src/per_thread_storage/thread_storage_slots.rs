@@ -1,0 +1,302 @@
+use std::{
+    cell::UnsafeCell,
+    ops::Deref,
+    ptr::NonNull,
+    sync::atomic::{self, AtomicUsize},
+};
+
+use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
+
+use crate::{
+    atomic_type::Atomic,
+    per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlotValue},
+    thread_state::{EncodedThreadState, ThreadState},
+};
+
+/// all information needed to represent the "current data" of a thread storage slots instance.
+/// this is basically the raw parts of the backing vector used to allocate this data.
+struct ThreadStorageSlotsCurData {
+    ptr: *mut ThreadStorageSlotValue,
+    len: ThreadStorageSlotId,
+    capacity: usize,
+}
+impl ThreadStorageSlotsCurData {
+    /// creates a new empty cur data info representing an empty buffer.
+    const fn new() -> Self {
+        Self {
+            ptr: NonNull::dangling().as_ptr(),
+            len: ThreadStorageSlotId::ZERO,
+            capacity: 0,
+        }
+    }
+}
+
+/// a dummy type used as the inner data type of the write lock. used to distinguish write lock guards from other guards.
+///
+/// # Safety
+///
+/// must only be used as the data of the write guard, otherwise it can be misused to trick the code to think it received a write lock
+/// guard even though it is just the guard of some other lock using this as its inner data type.
+struct WriteLockMarker;
+
+/// concurrent data structure for holding the buffer containing the storage slots of the different threads that play part of the
+/// rcu book-keeping.
+pub struct ThreadStorageSlots {
+    cur_data: UnsafeCell<ThreadStorageSlotsCurData>,
+    cur_data_refcnt: AtomicUsize,
+
+    /// a lock which prevents swapping while a reader is in the process of incrementing the refcount.
+    /// used to synchronize writers with readers that want to grab a ref to the data.
+    ///
+    /// we use parking lot's rwlock since it is fair, and fairness is important here, to avoid starving writers in case all threads
+    /// are constantly reading this (e.g. due to trying to wait for grace periods).
+    swap_data_atomicity_lock: parking_lot::RwLock<()>,
+
+    /// a lock which is used to make writers mutually exclusive, such that at any given moment, only one writer can work.
+    write_lock: std::sync::Mutex<WriteLockMarker>,
+
+    /// indices of free slots.
+    /// protected by the write lock.
+    free_slots: UnsafeCell<Vec<ThreadStorageSlotId>>,
+}
+impl ThreadStorageSlots {
+    /// creates a new empty slots buffer.
+    pub const fn new() -> Self {
+        Self {
+            cur_data: UnsafeCell::new(ThreadStorageSlotsCurData::new()),
+            cur_data_refcnt: AtomicUsize::new(0),
+            swap_data_atomicity_lock: parking_lot::RwLock::new(()),
+            write_lock: std::sync::Mutex::new(WriteLockMarker),
+            free_slots: UnsafeCell::new(Vec::new()),
+        }
+    }
+
+    /// returns a read guard for the current slots buffer. the returned guard dereferences to a slice of all slots.
+    /// you must not block while holding the guard, and must not hold it for a "long time".
+    pub fn read(&self) -> ThreadStorageSlotsReadGuard<'_> {
+        // grab the read lock to wait for any ongoing swap operation to finish before we grab a reference to the data.
+        let _swap_data_guard = self.swap_data_atomicity_lock.read();
+        if self.cur_data_refcnt.fetch_add(
+            1,
+            // TODO: ordering
+            atomic::Ordering::Relaxed,
+        ) == usize::MAX
+        {
+            panic!("refcount overflow");
+        };
+
+        ThreadStorageSlotsReadGuard { origin: self }
+    }
+
+    /// returns the current data as a slice.
+    ///
+    /// # Safety
+    ///
+    /// you must guarantee that during this operation, no-one will swap the current data.
+    /// you must also make sure to only use the returned slice as long as it is guaranteed that no-one will swap the current data.
+    unsafe fn cur_data_as_slice(&self) -> &TypedSlice<ThreadStorageSlotId, ThreadStorageSlotValue> {
+        // SAFETY: caller guarantees that no-one writes to the data
+        let cur_data = unsafe { &*self.cur_data.get() };
+
+        // SAFETY: the slices stored are always valid slices.
+        unsafe { TypedSlice::from_raw_parts(cur_data.ptr, cur_data.len) }
+    }
+
+    /// waits for all readers of the current data to finish using it, blocks new readers, and then lets you modify the current data.
+    /// must be called while holding the write lock.
+    fn modify_cur_data<F, R>(
+        &self,
+        f: F,
+        _write_guard: &std::sync::MutexGuard<'_, WriteLockMarker>,
+    ) -> R
+    where
+        F: FnOnce(&mut ThreadStorageSlotsCurData) -> R,
+    {
+        // prevent any new readers from seeing partial state, and prevent any new readers from starting to read the data
+        let _swap_data_guard = self.swap_data_atomicity_lock.read();
+
+        // wait for all existing readers to finish.
+        // we use spinning since readers should be fast and should not block.
+        while self.cur_data_refcnt.load(
+            // TODO: ordering
+            atomic::Ordering::Relaxed,
+        ) != 0
+        {
+            std::hint::spin_loop();
+        }
+
+        // SAFETY: we are holding the write lock, so no one can write to this other than us.
+        let cur_data = unsafe { &mut *self.cur_data.get() };
+        f(cur_data)
+    }
+
+    /// allocates a new storage slot for some thread, given the thread's initial state.
+    pub fn allocate_slot(&self, initial_thread_state: ThreadState) -> ThreadStorageSlotId {
+        let encoded_initial_thread_state = initial_thread_state.encode();
+
+        // synchronize with other writers. at any given point, only one writer can work.
+        let write_guard = self.write_lock.lock().unwrap();
+
+        // SAFETY: we are holding the write lock.
+        let free_slots = unsafe { &mut *self.free_slots.get() };
+
+        match free_slots.pop() {
+            Some(free_slot_id) => {
+                // have a free slot in the existing storage, use it.
+                self.allocate_slot_from_free_slot(
+                    encoded_initial_thread_state,
+                    free_slot_id,
+                    &write_guard,
+                )
+            }
+            None => self.allocate_slot_no_free_slots(encoded_initial_thread_state, write_guard),
+        }
+    }
+
+    /// allocates a storage slot given a free slot in the existing storage buffer.
+    fn allocate_slot_from_free_slot(
+        &self,
+        encoded_initial_thread_state: EncodedThreadState,
+        free_slot_id: ThreadStorageSlotId,
+        _write_guard: &std::sync::MutexGuard<'_, WriteLockMarker>,
+    ) -> ThreadStorageSlotId {
+        // SAFETY: we are holding the write lock, so no one can modify the cur data other than us.
+        let cur_data = unsafe { self.cur_data_as_slice() };
+
+        cur_data[free_slot_id].state.store(
+            encoded_initial_thread_state,
+            // TODO: ordering
+            atomic::Ordering::Relaxed,
+        );
+        free_slot_id
+    }
+
+    /// allocates a storage slot given that the current storage buffer is empty, and a new one must be allocated.
+    ///
+    /// # Safety
+    ///
+    /// must only be called if the current data is empty (capacity == 0).
+    unsafe fn allocate_slot_no_cur_data(
+        &self,
+        new_slot_value: ThreadStorageSlotValue,
+        write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
+    ) -> ThreadStorageSlotId {
+        // assuming a multi-threaded tokio runtime, which is what is expected to be used with this crate, we will have at
+        // least `num_cpus` threads, so pre-allocate enough space for that amount.
+        let num_cpus = num_cpus::get();
+        let mut new_data: TypedVec<ThreadStorageSlotId, ThreadStorageSlotValue> =
+            TypedVec::with_capacity(num_cpus);
+        new_data.push(new_slot_value);
+
+        let (new_data_ptr, new_data_len, new_data_capacity) = new_data.into_raw_parts();
+
+        // NOTE: from this point on, the existing `cur_data` reference can no longer be used, to avoid violating rust's
+        // aliasing rules.
+
+        self.modify_cur_data(
+            |cur_data| {
+                cur_data.ptr = new_data_ptr;
+                cur_data.len = ThreadStorageSlotId::from_raw_index(new_data_len);
+                cur_data.capacity = new_data_capacity;
+            },
+            &write_guard,
+        );
+
+        ThreadStorageSlotId::ZERO
+    }
+
+    /// allocate a storage slot given that the current storage buffer has no empty slots.
+    fn allocate_slot_no_free_slots(
+        &self,
+        encoded_initial_thread_state: EncodedThreadState,
+        write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
+    ) -> ThreadStorageSlotId {
+        // no free slots in the existing storage, allocate a bigger vector.
+
+        let new_slot_value = ThreadStorageSlotValue {
+            state: Atomic::<EncodedThreadState>::new(encoded_initial_thread_state),
+        };
+
+        // SAFETY: we are holding the write lock, so no one can write to this other than us.
+        let cur_data = unsafe { &*self.cur_data.get() };
+
+        if cur_data.capacity == 0 {
+            // no storage vector currently allocated, allocate a new one.
+            // SAFETY: capacity is zero so the current buffer is empty
+            unsafe { self.allocate_slot_no_cur_data(new_slot_value, write_guard) }
+        } else {
+            // a storage vector is currently allocated, push a new entry into it.
+            // SAFETY: capacity is non-zero so the current buffer is valid
+            unsafe {
+                self.allocate_slot_no_free_slots_grow_cur_data(
+                    new_slot_value,
+                    cur_data,
+                    write_guard,
+                )
+            }
+        }
+    }
+
+    /// allocate a storage slot given that the current storage buffer has no empty slots, and given that the current storage buffer
+    /// is non-empty, and we should thus grow it instead of allocating a new one.
+    ///
+    /// # Safety
+    ///
+    /// may only be called if the current buffer is non-empty (capacity != 0)
+    unsafe fn allocate_slot_no_free_slots_grow_cur_data(
+        &self,
+        new_slot_value: ThreadStorageSlotValue,
+        cur_data: &ThreadStorageSlotsCurData,
+        write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
+    ) -> ThreadStorageSlotId {
+        // SAFETY: this function is only called when we have an existing storage vector.
+        let mut storage =
+            unsafe { TypedVec::from_raw_parts(cur_data.ptr, cur_data.len, cur_data.capacity) };
+
+        if cur_data.len.to_raw_index() < cur_data.capacity {
+            // no-reallocation needed, we can push into the vec and it won't re-alloc.
+            storage.push(new_slot_value)
+        } else {
+            // re-allocation needed. the re-allocation may free the current data pointer and move the allocation to a new
+            // location. so, while re-allocating, we need all readers to finish first.
+            self.modify_cur_data(
+                |cur_data| {
+                    let new_slot_id = storage.push(new_slot_value);
+
+                    // the push changed some of the parameters, re-write them
+                    let (cur_data_ptr, cur_data_len, cur_data_capacity) = storage.into_raw_parts();
+                    cur_data.ptr = cur_data_ptr;
+                    cur_data.len = ThreadStorageSlotId::from_raw_index(cur_data_len);
+                    cur_data.capacity = cur_data_capacity;
+
+                    new_slot_id
+                },
+                &write_guard,
+            )
+        }
+    }
+}
+
+/// a read guard for the thread storage slots. dereferences into a slice of all slots.
+/// you must not block while holding this guard, and must not hold it for a "long time".
+pub struct ThreadStorageSlotsReadGuard<'a> {
+    origin: &'a ThreadStorageSlots,
+}
+impl<'a> Deref for ThreadStorageSlotsReadGuard<'a> {
+    type Target = TypedSlice<ThreadStorageSlotId, ThreadStorageSlotValue>;
+
+    fn deref(&self) -> &Self::Target {
+        // SAFETY: TODO
+        unsafe { self.origin.cur_data_as_slice() }
+    }
+}
+impl<'a> Drop for ThreadStorageSlotsReadGuard<'a> {
+    fn drop(&mut self) {
+        self.origin.cur_data_refcnt.fetch_sub(
+            1,
+            // TODO: ordering
+            // probably at least release ordering here to make sure all previous operations are finished.
+            atomic::Ordering::Relaxed,
+        );
+    }
+}
