@@ -17,7 +17,13 @@ use crate::{
 /// this is basically the raw parts of the backing vector used to allocate this data.
 struct ThreadStorageSlotsCurData {
     ptr: *mut ThreadStorageSlotValue,
-    len: ThreadStorageSlotId,
+
+    /// the length of the buffer.
+    ///
+    /// note that this is atomic even though this whole structure typically sits inside a big `UnsafeCell` since in some specific
+    /// scenarios we only want to update the len, without getting mutable access to the entire struct.
+    len: AtomicUsize,
+
     capacity: usize,
 }
 impl ThreadStorageSlotsCurData {
@@ -25,7 +31,7 @@ impl ThreadStorageSlotsCurData {
     const fn new() -> Self {
         Self {
             ptr: NonNull::dangling().as_ptr(),
-            len: ThreadStorageSlotId::ZERO,
+            len: AtomicUsize::new(0),
             capacity: 0,
         }
     }
@@ -106,7 +112,16 @@ impl ThreadStorageSlots {
         let cur_data = unsafe { &*self.cur_data.get() };
 
         // SAFETY: the slices stored are always valid slices.
-        unsafe { TypedSlice::from_raw_parts(cur_data.ptr, cur_data.len) }
+        unsafe {
+            TypedSlice::from_raw_parts(
+                cur_data.ptr,
+                ThreadStorageSlotId::from_raw_index(cur_data.len.load(
+                    // use acquire ordering to make sure that in the case where we see len increments, we are guaranteed to first see
+                    // the write to the pointed-at data.
+                    atomic::Ordering::Acquire,
+                )),
+            )
+        }
     }
 
     /// waits for all readers of the current data to finish using it, blocks new readers, and then lets you modify the current data.
@@ -229,7 +244,7 @@ impl ThreadStorageSlots {
         self.modify_cur_data(
             |cur_data| {
                 cur_data.ptr = new_data_ptr;
-                cur_data.len = ThreadStorageSlotId::from_raw_index(new_data_len);
+                cur_data.len = AtomicUsize::new(new_data_len);
                 cur_data.capacity = new_data_capacity;
             },
             &write_guard,
@@ -276,13 +291,36 @@ impl ThreadStorageSlots {
         cur_data: &ThreadStorageSlotsCurData,
         write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
-        // SAFETY: this function is only called when we have an existing storage vector.
-        let mut storage =
-            unsafe { TypedVec::from_raw_parts(cur_data.ptr, cur_data.len, cur_data.capacity) };
+        let len = cur_data.len.load(
+            // ordering doesn't matter, we have exclusive access to this field due to the write lock
+            atomic::Ordering::Relaxed,
+        );
 
-        if cur_data.len.to_raw_index() < cur_data.capacity {
+        // SAFETY: this function is only called when we have an existing storage vector.
+        let mut new_data = unsafe {
+            TypedVec::from_raw_parts(
+                cur_data.ptr,
+                ThreadStorageSlotId::from_raw_index(len),
+                cur_data.capacity,
+            )
+        };
+
+        if len < cur_data.capacity {
             // no-reallocation needed, we can push into the vec and it won't re-alloc.
-            storage.push(new_slot_value)
+            let new_slot_id = new_data.push(new_slot_value);
+
+            // update the len to the new incremented len
+            cur_data.len.store(
+                new_data.len().to_raw_index(),
+                // use release ordering to make sure that the previous write to the new slot happens before the len increment.
+                //
+                // note that we break the release-sequence of this variable here due to using a plain store, which is not a RMW operation.
+                // but, this is fine since the happens before chain is maintained through another synchronization primitive - the write
+                // lock, which synchronizes us with all previous incrementers of the len.
+                atomic::Ordering::Release,
+            );
+
+            new_slot_id
         } else {
             // re-allocation needed. the re-allocation may free the current data pointer and move the allocation to a new
             // location. so, while re-allocating, we need to guarantee that no readers use the data.
@@ -296,13 +334,13 @@ impl ThreadStorageSlots {
             // by any previous "readers".
             self.modify_cur_data(
                 |cur_data| {
-                    let new_slot_id = storage.push(new_slot_value);
+                    let new_slot_id = new_data.push(new_slot_value);
 
                     // the push changed some of the parameters, re-write them
-                    let (cur_data_ptr, cur_data_len, cur_data_capacity) = storage.into_raw_parts();
-                    cur_data.ptr = cur_data_ptr;
-                    cur_data.len = ThreadStorageSlotId::from_raw_index(cur_data_len);
-                    cur_data.capacity = cur_data_capacity;
+                    let (new_data_ptr, new_data_len, new_data_capacity) = new_data.into_raw_parts();
+                    cur_data.ptr = new_data_ptr;
+                    cur_data.len = AtomicUsize::new(new_data_len);
+                    cur_data.capacity = new_data_capacity;
 
                     new_slot_id
                 },
