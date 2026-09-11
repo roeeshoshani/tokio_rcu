@@ -279,13 +279,8 @@ impl ThreadStorageSlots {
         );
 
         // SAFETY: this function is only called when we have an existing storage vector.
-        let mut new_data = unsafe {
-            TypedVec::from_raw_parts(
-                cur_data.ptr,
-                ThreadStorageSlotId::from_raw_index(len),
-                cur_data.capacity,
-            )
-        };
+        let mut new_data: TypedVec<ThreadStorageSlotId, ThreadStorageSlotValue> =
+            unsafe { TypedVec::from_raw_parts_unchecked(cur_data.ptr, len, cur_data.capacity) };
 
         if len < cur_data.capacity {
             // no-reallocation needed, we can push into the vec and it won't re-alloc.
@@ -357,6 +352,20 @@ impl ThreadStorageSlots {
         // SAFETY: we are holding the write lock.
         let free_slots = unsafe { &mut *self.free_slots.get() };
         free_slots.push(slot_id);
+    }
+}
+impl Drop for ThreadStorageSlots {
+    fn drop(&mut self) {
+        let cur_data = self.cur_data.get_mut();
+        if cur_data.capacity != 0 {
+            let _ = unsafe {
+                TypedVec::<ThreadStorageSlotId, ThreadStorageSlotValue>::from_raw_parts_unchecked(
+                    cur_data.ptr,
+                    cur_data.len.load(atomic::Ordering::Relaxed),
+                    cur_data.capacity,
+                )
+            };
+        }
     }
 }
 
