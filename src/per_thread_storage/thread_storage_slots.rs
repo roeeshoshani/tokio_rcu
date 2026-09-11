@@ -72,7 +72,10 @@ impl ThreadStorageSlots {
     }
 
     /// returns a read guard for the current slots buffer. the returned guard dereferences to a slice of all slots.
+    ///
     /// you must not block while holding the guard, and must not hold it for a "long time".
+    ///
+    /// this function provides acquire memory ordering in relation to writers that re-allocate the data buffer.
     pub fn read(&self) -> ThreadStorageSlotsReadGuard<'_> {
         // grab the read lock to wait for any ongoing swap operation to finish before we grab a reference to the data.
         let _swap_data_guard = self.swap_data_atomicity_lock.read();
@@ -80,7 +83,9 @@ impl ThreadStorageSlots {
             1,
             // use acquire ordering to make sure that every operation that actually uses the data happens after this increment,
             // since only after this increment, it is guaranteed that we can use the data.
-            // it is also trivial to see why this is an "acquire" operation, semantically speaking.
+            //
+            // furthermore, this guarantees that we see all writes to the pointed-at data that were performed by any previous writers
+            // that re-allocated the buffer, so we see the initialized contents of those buffers.
             atomic::Ordering::Acquire,
         ) == usize::MAX
         {
@@ -105,7 +110,13 @@ impl ThreadStorageSlots {
     }
 
     /// waits for all readers of the current data to finish using it, blocks new readers, and then lets you modify the current data.
+    ///
     /// must be called while holding the write lock.
+    ///
+    /// provides acquire ordering in relation to any previously existing readers of the data pointer.
+    /// this acquire ordering is already provided inside the callback, and intuitively, it is also maintained outside of it.
+    ///
+    /// furthermore, once finished, it provides release ordering in relation to future readers of the data.
     fn modify_cur_data<F, R>(
         &self,
         f: F,
@@ -176,8 +187,16 @@ impl ThreadStorageSlots {
 
         cur_data[free_slot_id].state.store(
             encoded_initial_thread_state,
-            // TODO: ordering
-            atomic::Ordering::Relaxed,
+            // release ordering is needed here to keep a happens-before chain between any previous users of this slot, and readers
+            // of this slot.
+            //
+            // at this point, we ourselves are already synchronized with any previous user of this slot, since we got the slot id from
+            // the list of free slot ids, which is protected by the write lock. so, any previous writes performed by previous users are
+            // visible to us at this point.
+            //
+            // we want to make sure that any thread loading this value will also see all writes performed by previous owners of this
+            // slot. so, we use release ordering here.
+            atomic::Ordering::Release,
         );
         free_slot_id
     }
@@ -200,9 +219,6 @@ impl ThreadStorageSlots {
         new_data.push(new_slot_value);
 
         let (new_data_ptr, new_data_len, new_data_capacity) = new_data.into_raw_parts();
-
-        // NOTE: from this point on, the existing `cur_data` reference can no longer be used, to avoid violating rust's
-        // aliasing rules.
 
         self.modify_cur_data(
             |cur_data| {
@@ -269,7 +285,15 @@ impl ThreadStorageSlots {
             storage.push(new_slot_value)
         } else {
             // re-allocation needed. the re-allocation may free the current data pointer and move the allocation to a new
-            // location. so, while re-allocating, we need all readers to finish first.
+            // location. so, while re-allocating, we need to guarantee that no readers use the data.
+            //
+            // furthermore, note that the acquire and then release ordering provided by `modify_cur_data` are needed to maintain
+            // a correct happens before chain for writes to the pointed-at data performed by any previous "readers", since after this
+            // operation, future readers may read data from a completely different location in memory than the location to which those
+            // previous writes were performed.
+            //
+            // the acquire then release ordering make sure that those future loads will be ordered after any previous writes performed
+            // by any previous "readers".
             self.modify_cur_data(
                 |cur_data| {
                     let new_slot_id = storage.push(new_slot_value);
