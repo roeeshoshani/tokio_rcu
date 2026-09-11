@@ -260,8 +260,8 @@ use crate::{
     notify::Notify,
     per_thread_storage::{
         this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
-        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot,
-        this_thread_get_storage_slot_id, thread_storage_slot_get_all,
+        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
+        thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
 };
@@ -484,38 +484,41 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         let this_thread_storage_slot_id = this_thread_get_storage_slot_id();
 
         // check if all threads have seen our new epoch id
-        if thread_storage_slot_get_all().all(|(storage_slot_id, storage_slot)| {
-            if storage_slot_id == this_thread_storage_slot_id {
-                // this slot represents the current thread. no need to wait for ourselves.
-                //
-                // note that if we didn't do this, then our synchronize rcu implementation would always block at least once, due
-                // to having to yield at least once to let the current thread pass through a quiescent state.
-                // this would be very wasteful and unnecessarily slow.
-                return true;
-            }
-            let encoded_state = storage_slot.state.load(
-                // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
-                // pointed at by the rcu protected pointer happen before we see the store to the state.
-                // this is important in order to guarantee that we don't see those writes after we free the protected pointer, which will
-                // lead to a UAF.
-                atomic::Ordering::Acquire,
-            );
+        if thread_storage_slot_get_all()
+            .iter_enumerated()
+            .all(|(storage_slot_id, storage_slot)| {
+                if storage_slot_id == this_thread_storage_slot_id {
+                    // this slot represents the current thread. no need to wait for ourselves.
+                    //
+                    // note that if we didn't do this, then our synchronize rcu implementation would always block at least once, due
+                    // to having to yield at least once to let the current thread pass through a quiescent state.
+                    // this would be very wasteful and unnecessarily slow.
+                    return true;
+                }
+                let encoded_state = storage_slot.state.load(
+                    // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
+                    // pointed at by the rcu protected pointer happen before we see the store to the state.
+                    // this is important in order to guarantee that we don't see those writes after we free the protected pointer, which will
+                    // lead to a UAF.
+                    atomic::Ordering::Acquire,
+                );
 
-            let Some(state) = ThreadState::decode(encoded_state) else {
-                // if the slot is empty, ignore it.
-                // it may at some point be allocated by some new thread that just started, but in this function we explicitly ignore
-                // new threads.
-                return true;
-            };
+                let Some(state) = ThreadState::decode(encoded_state) else {
+                    // if the slot is empty, ignore it.
+                    // it may at some point be allocated by some new thread that just started, but in this function we explicitly ignore
+                    // new threads.
+                    return true;
+                };
 
-            if !state.is_busy {
-                // this thread is currently not busy running any future.
-                // it may start running as soon as we finished checking it, but in this function we explicitly ignore non busy threads.
-                return true;
-            }
+                if !state.is_busy {
+                    // this thread is currently not busy running any future.
+                    // it may start running as soon as we finished checking it, but in this function we explicitly ignore non busy threads.
+                    return true;
+                }
 
-            last_seen_epoch_id_predicate(state.last_seen_epoch_id)
-        }) {
+                last_seen_epoch_id_predicate(state.last_seen_epoch_id)
+            })
+        {
             // all threads saw our new epoch id, we are done waiting
             break;
         }
@@ -557,16 +560,18 @@ fn on_thread_stop() {
 }
 
 fn on_thread_park() {
-    let storage_slot = this_thread_get_storage_slot();
+    {
+        let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
 
-    // mark this thread as non-busy.
-    storage_slot.state.fetch_and(
-        !1,
-        // no special ordering needed here.
-        // note that this relaxed store doesn't break the release-sequence of this variable (see c++ memory model for more
-        // info), so it doesn't prevent the loader from synchronizing with any previous release ordered store.
-        atomic::Ordering::Relaxed,
-    );
+        // mark this thread as non-busy.
+        storage_slot.state.fetch_and(
+            !1,
+            // no special ordering needed here.
+            // note that this relaxed store doesn't break the release-sequence of this variable (see c++ memory model for more
+            // info), so it doesn't prevent the loader from synchronizing with any previous release ordered store.
+            atomic::Ordering::Relaxed,
+        );
+    }
 
     // wake all waiters since some waiters may be waiting for us to see their new epoch id, and we are instead going to sleep
     // so we will never see it.
@@ -576,8 +581,6 @@ fn on_thread_park() {
 }
 
 fn on_thread_unpark() {
-    let storage_slot = this_thread_get_storage_slot();
-
     // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
     //
     // this is needed for the case where a reset operation was performed since we last went to sleep.
@@ -585,6 +588,8 @@ fn on_thread_unpark() {
     // the epoch id since the reset may think that we saw his epoch id increment since we have a stale high epoch id value, even
     // though in practice we didn't really see his epoch id increment.
     let new_seen_epoch_id = this_thread_see_new_epoch_id();
+
+    let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
     storage_slot.state.store(
         ThreadState {
             last_seen_epoch_id: new_seen_epoch_id,
@@ -599,40 +604,45 @@ fn on_thread_unpark() {
 }
 
 fn on_after_task_poll() {
-    let storage_slot = this_thread_get_storage_slot();
     let new_seen_epoch_id = this_thread_see_new_epoch_id();
 
-    // at this point we want to swap the current state with the new state.
-    // we could do that using the atomic `swap` operation, but we can do something more performant while still maintaining correctness.
-    //
-    // the slot's data is loaded from multiple threads, but it is only written to by the current thread who owns that slot.
-    // we can use that fact to split the atomic `swap` operation into a `load` and then a `store`, while still being guaranteed that no
-    // one will modify the value between the `load` and the `store`, since the current thread are the only one allowed to modify the
-    // value.
-    //
-    // as for why this is more efficient, the load-then-store method requires looser memory ordering guarantees, and thus provides more
-    // flexibility for optimization by the hardware's memory subsystem.
-    //
-    // for example, on x86, the load then store will be translated to just 2 simple `MOV` instructions, while a `swap` would have been
-    // translated to a `LOCK XCHG` instruction, which requires much more effort from the hardware.
-    let prev_state_encoded = storage_slot.state.load(
-        // we don't need any special ordering, since this thread is the only entity which can write to this variable.
-        // so, the returned value is sequentially consistent with the execution order of the code in this thread.
+    // extra scope to scope the lifetime of the read guard of the storage slots buffer
+    let prev_state_encoded = {
+        let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
+        // at this point we want to swap the current state with the new state.
+        // we could do that using the atomic `swap` operation, but we can do something more performant while still maintaining correctness.
         //
-        // also, we don't need to synchronize this load against any other shared variables, since the returned value is only used to
-        // check whether it was different than the newly written value, and is thus not used in combination with any other shared state.
-        atomic::Ordering::Relaxed,
-    );
-    storage_slot.state.store(
-        ThreadState {
-            last_seen_epoch_id: new_seen_epoch_id,
-            is_busy: true,
-        }
-        .encode(),
-        // we use release ordering to make sure that all writes to the data pointed at by the rcu protected pointer happen before this
-        // store so that no writes happen after the data is freed.
-        atomic::Ordering::Release,
-    );
+        // the slot's data is loaded from multiple threads, but it is only written to by the current thread who owns that slot.
+        // we can use that fact to split the atomic `swap` operation into a `load` and then a `store`, while still being guaranteed that no
+        // one will modify the value between the `load` and the `store`, since the current thread are the only one allowed to modify the
+        // value.
+        //
+        // as for why this is more efficient, the load-then-store method requires looser memory ordering guarantees, and thus provides more
+        // flexibility for optimization by the hardware's memory subsystem.
+        //
+        // for example, on x86, the load then store will be translated to just 2 simple `MOV` instructions, while a `swap` would have been
+        // translated to a `LOCK XCHG` instruction, which requires much more effort from the hardware.
+        let prev_state_encoded = storage_slot.state.load(
+            // we don't need any special ordering, since this thread is the only entity which can write to this variable.
+            // so, the returned value is sequentially consistent with the execution order of the code in this thread.
+            //
+            // also, we don't need to synchronize this load against any other shared variables, since the returned value is only used to
+            // check whether it was different than the newly written value, and is thus not used in combination with any other shared state.
+            atomic::Ordering::Relaxed,
+        );
+        storage_slot.state.store(
+            ThreadState {
+                last_seen_epoch_id: new_seen_epoch_id,
+                is_busy: true,
+            }
+            .encode(),
+            // we use release ordering to make sure that all writes to the data pointed at by the rcu protected pointer happen before this
+            // store so that no writes happen after the data is freed.
+            atomic::Ordering::Release,
+        );
+
+        prev_state_encoded
+    };
 
     let prev_state = ThreadState::decode(prev_state_encoded).unwrap();
 

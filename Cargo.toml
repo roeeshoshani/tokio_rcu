@@ -11,7 +11,8 @@ categories = ["concurrency", "algorithms", "asynchronous", "data-structures", "m
 
 [dependencies]
 index_type = "0.7.1"
-spin = { version = "0.12.2", features = ["fair_mutex"] }
+num_cpus = "1.17.0"
+parking_lot = "0.12.5"
 tokio = { version = "1.53.1", features = ["sync", "rt", "rt-multi-thread"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
