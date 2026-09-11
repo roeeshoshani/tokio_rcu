@@ -284,7 +284,9 @@ impl ThreadStorageSlots {
 
         if len < cur_data.capacity {
             // no-reallocation needed, we can push into the vec and it won't re-alloc.
-            let new_slot_id = new_data.push(new_slot_value);
+            let new_slot_id = new_data
+                .try_push(new_slot_value)
+                .expect("too many concurrent threads");
 
             // update the len to the new incremented len
             cur_data.len.store(
