@@ -141,7 +141,7 @@ impl ThreadStorageSlots {
         F: FnOnce(&mut ThreadStorageSlotsCurData) -> R,
     {
         // prevent any new readers from seeing partial state, and prevent any new readers from starting to read the data
-        let _swap_data_guard = self.swap_data_atomicity_lock.read();
+        let _swap_data_guard = self.swap_data_atomicity_lock.write();
 
         // wait for all existing readers to finish.
         // we use spinning since readers should be fast and should not block.
