@@ -215,10 +215,9 @@ impl ThreadStorageSlots {
         write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
         // assuming a multi-threaded tokio runtime, which is what is expected to be used with this crate, we will have at
-        // least `num_cpus` threads, so pre-allocate enough space for that amount.
-        let num_cpus = num_cpus::get();
+        // least `num_cpus` worker threads plus 1 main thread, so pre-allocate enough space for that amount.
         let mut new_data: TypedVec<ThreadStorageSlotId, ThreadStorageSlotValue> =
-            TypedVec::with_capacity(num_cpus);
+            TypedVec::with_capacity(num_cpus::get() + 1);
         new_data.push(new_slot_value);
 
         let (new_data_ptr, new_data_len, new_data_capacity) = new_data.into_raw_parts();
