@@ -442,4 +442,20 @@ mod tests {
             unsafe { slots.dealloc(slot) };
         }
     }
+
+    #[test]
+    fn test_realloc() {
+        let slots = ThreadStorageSlots::new();
+        let thread_state = ThreadState {
+            last_seen_epoch_id: EPOCH_ID_MIN,
+            is_busy: true,
+        };
+        let id = slots.alloc(thread_state);
+        unsafe { slots.dealloc(id) };
+        for _ in 0..128 {
+            let new_id = slots.alloc(thread_state);
+            assert_eq!(id, new_id);
+            unsafe { slots.dealloc(new_id) };
+        }
+    }
 }
