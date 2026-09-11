@@ -54,6 +54,8 @@ struct CurDataLockMarker;
 /// concurrent data structure for holding the buffer containing the storage slots of the different threads that play part of the
 /// rcu book-keeping.
 pub struct ThreadStorageSlots {
+    /// the current data buffer.
+    /// protected by both the cur data lock and the write lock.
     cur_data: UnsafeCell<ThreadStorageSlotsCurData>,
 
     /// a lock protecting the current data.
