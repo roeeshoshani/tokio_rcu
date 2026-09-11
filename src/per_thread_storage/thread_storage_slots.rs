@@ -320,6 +320,9 @@ impl ThreadStorageSlots {
                 atomic::Ordering::Release,
             );
 
+            // avoid dropping the data, it is still being used as the storage buffer in this case
+            core::mem::forget(new_data);
+
             new_slot_id
         } else {
             // re-allocation needed. the re-allocation may free the current data pointer and move the allocation to a new
