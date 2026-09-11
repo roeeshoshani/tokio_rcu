@@ -407,7 +407,9 @@ mod tests {
     use std::sync::atomic;
 
     use crate::{
-        epoch::EPOCH_ID_MIN, per_thread_storage::ThreadStorageSlots, thread_state::ThreadState,
+        epoch::{EPOCH_ID_MIN, EpochId},
+        per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlots},
+        thread_state::ThreadState,
     };
 
     #[test]
@@ -424,5 +426,33 @@ mod tests {
             thread_state.encode()
         );
         unsafe { slots.dealloc(slot_id) };
+    }
+
+    #[test]
+    fn test_multiple_allocs() {
+        const NUM_ALLOCS: u16 = 1024;
+        fn thread_state_by_alloc_index(alloc_index: u16) -> ThreadState {
+            ThreadState {
+                last_seen_epoch_id: ((alloc_index + 1) * 2) as EpochId,
+                is_busy: true,
+            }
+        }
+        let slots = ThreadStorageSlots::new();
+        let slot_ids: Vec<ThreadStorageSlotId> = (0..NUM_ALLOCS)
+            .map(|i| slots.alloc(thread_state_by_alloc_index(i)))
+            .collect();
+
+        for i in 0..NUM_ALLOCS {
+            let slot_id = slot_ids[i as usize];
+
+            assert_eq!(
+                slots.read()[slot_id].state.load(atomic::Ordering::Relaxed),
+                thread_state_by_alloc_index(i).encode()
+            );
+        }
+
+        for slot in slot_ids {
+            unsafe { slots.dealloc(slot) };
+        }
     }
 }
