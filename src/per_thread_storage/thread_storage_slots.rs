@@ -41,22 +41,26 @@ impl ThreadStorageSlotsCurData {
 ///
 /// # Safety
 ///
-/// must only be used as the data of the write guard, otherwise it can be misused to trick the code to think it received a write lock
-/// guard even though it is just the guard of some other lock using this as its inner data type.
+/// must only be used as the data of the write lock.
 struct WriteLockMarker;
+
+/// a dummy type used as the inner data type of the cur data lock. used to distinguish cur data lock guards from other guards.
+///
+/// # Safety
+///
+/// must only be used as the data of the cur data lock.
+struct CurDataLockMarker;
 
 /// concurrent data structure for holding the buffer containing the storage slots of the different threads that play part of the
 /// rcu book-keeping.
 pub struct ThreadStorageSlots {
     cur_data: UnsafeCell<ThreadStorageSlotsCurData>,
-    cur_data_refcnt: AtomicUsize,
 
-    /// a lock which prevents swapping while a reader is in the process of incrementing the refcount.
-    /// used to synchronize writers with readers that want to grab a ref to the data.
-    ///
-    /// we use parking lot's rwlock since it is fair, and fairness is important here, to avoid starving writers in case all threads
-    /// are constantly reading this (e.g. due to trying to wait for grace periods).
-    swap_data_atomicity_lock: parking_lot::RwLock<()>,
+    /// a lock protecting the current data.
+    /// it is provided as an external lock instead of wrapping the cur data directly, since the cur data is also protected from writes
+    /// by writing the write lock. doing it separately allow us to access the inner data in such scenarios without having to lock this
+    /// lock when it is not needed.
+    cur_data_lock: parking_lot::RwLock<CurDataLockMarker>,
 
     /// a lock which is used to make writers mutually exclusive, such that at any given moment, only one writer can work.
     write_lock: std::sync::Mutex<WriteLockMarker>,
@@ -70,8 +74,7 @@ impl ThreadStorageSlots {
     pub const fn new() -> Self {
         Self {
             cur_data: UnsafeCell::new(ThreadStorageSlotsCurData::new()),
-            cur_data_refcnt: AtomicUsize::new(0),
-            swap_data_atomicity_lock: parking_lot::RwLock::new(()),
+            cur_data_lock: parking_lot::RwLock::new(CurDataLockMarker),
             write_lock: std::sync::Mutex::new(WriteLockMarker),
             free_slots: UnsafeCell::new(Vec::new()),
         }
@@ -83,22 +86,10 @@ impl ThreadStorageSlots {
     ///
     /// this function provides acquire memory ordering in relation to writers that re-allocate the data buffer.
     pub fn read(&self) -> ThreadStorageSlotsReadGuard<'_> {
-        // grab the read lock to wait for any ongoing swap operation to finish before we grab a reference to the data.
-        let _swap_data_guard = self.swap_data_atomicity_lock.read();
-        if self.cur_data_refcnt.fetch_add(
-            1,
-            // use acquire ordering to make sure that every operation that actually uses the data happens after this increment,
-            // since only after this increment, it is guaranteed that we can use the data.
-            //
-            // furthermore, this guarantees that we see all writes to the pointed-at data that were performed by any previous writers
-            // that re-allocated the buffer, so we see the initialized contents of those buffers.
-            atomic::Ordering::Acquire,
-        ) == usize::MAX
-        {
-            panic!("refcount overflow");
-        };
-
-        ThreadStorageSlotsReadGuard { origin: self }
+        ThreadStorageSlotsReadGuard {
+            _guard: self.cur_data_lock.read(),
+            origin: self,
+        }
     }
 
     /// returns the current data as a slice.
@@ -140,23 +131,12 @@ impl ThreadStorageSlots {
     where
         F: FnOnce(&mut ThreadStorageSlotsCurData) -> R,
     {
-        // prevent any new readers from seeing partial state, and prevent any new readers from starting to read the data
-        let _swap_data_guard = self.swap_data_atomicity_lock.write();
-
-        // wait for all existing readers to finish.
-        // we use spinning since readers should be fast and should not block.
-        while self.cur_data_refcnt.load(
-            // use acquire ordering to make sure that we see all operations performed by the readers as happens before their final
-            // store to the refcount. this guarantees that past this point, it is properly guaranteed that the readers no longer use
-            // the data, all of their uses happen before this load.
-            atomic::Ordering::Acquire,
-        ) != 0
-        {
-            std::hint::spin_loop();
-        }
+        // wait for all current readers to finish, and prevent new readers from entering.
+        let _write_guard = self.cur_data_lock.write();
 
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
         let cur_data = unsafe { &mut *self.cur_data.get() };
+
         f(cur_data)
     }
 
@@ -384,6 +364,7 @@ unsafe impl Sync for ThreadStorageSlots {}
 /// a read guard for the thread storage slots. dereferences into a slice of all slots.
 /// you must not block while holding this guard, and must not hold it for a "long time".
 pub struct ThreadStorageSlotsReadGuard<'a> {
+    _guard: parking_lot::RwLockReadGuard<'a, CurDataLockMarker>,
     origin: &'a ThreadStorageSlots,
 }
 impl<'a> Deref for ThreadStorageSlotsReadGuard<'a> {
@@ -392,16 +373,6 @@ impl<'a> Deref for ThreadStorageSlotsReadGuard<'a> {
     fn deref(&self) -> &Self::Target {
         // SAFETY: we are holding a refcount to the data, so it won't be modified until we are dropped.
         unsafe { self.origin.cur_data_as_slice() }
-    }
-}
-impl<'a> Drop for ThreadStorageSlotsReadGuard<'a> {
-    fn drop(&mut self) {
-        self.origin.cur_data_refcnt.fetch_sub(
-            1,
-            // use release ordering to make sure that all previous operations happen before this final store.
-            // it is also trivial to see why this is a "release" operation, semantically speaking.
-            atomic::Ordering::Release,
-        );
     }
 }
 
