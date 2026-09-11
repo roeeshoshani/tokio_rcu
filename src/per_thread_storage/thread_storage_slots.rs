@@ -146,7 +146,13 @@ impl ThreadStorageSlots {
     }
 
     /// allocates a new storage slot for some thread, given the thread's initial state.
-    pub fn alloc_slot(&self, initial_thread_state: ThreadState) -> ThreadStorageSlotId {
+    ///
+    /// the selected slot's transition from being vacant to being vacant immediately sets its state to the provided state.
+    /// there is not "allocated but uninitialized" state. as soon as the slot is allocated, it is also initialized to the given
+    /// initial state.
+    ///
+    /// this function provides acquire ordering in relation to the free operation of all previous users of the returned slot.
+    pub fn alloc(&self, initial_thread_state: ThreadState) -> ThreadStorageSlotId {
         let encoded_initial_thread_state = initial_thread_state.encode();
 
         // synchronize with other writers. at any given point, only one writer can work.
@@ -160,14 +166,14 @@ impl ThreadStorageSlots {
                 // have a free slot in the existing storage, use it.
                 // SAFETY: the free slot id originated from the list of free slot ids.
                 unsafe {
-                    self.alloc_slot_from_free_slot(
+                    self.alloc_from_free_slot(
                         encoded_initial_thread_state,
                         free_slot_id,
                         &write_guard,
                     )
                 }
             }
-            None => self.alloc_slot_no_free_slots(encoded_initial_thread_state, write_guard),
+            None => self.alloc_no_free_slots(encoded_initial_thread_state, write_guard),
         }
     }
 
@@ -176,7 +182,7 @@ impl ThreadStorageSlots {
     /// # Safety
     ///
     /// the provided storage slot must have originated from the list of free slot ids.
-    unsafe fn alloc_slot_from_free_slot(
+    unsafe fn alloc_from_free_slot(
         &self,
         encoded_initial_thread_state: EncodedThreadState,
         free_slot_id: ThreadStorageSlotId,
@@ -206,7 +212,7 @@ impl ThreadStorageSlots {
     /// # Safety
     ///
     /// must only be called if the current data is empty (capacity == 0).
-    unsafe fn alloc_slot_no_cur_data(
+    unsafe fn alloc_no_cur_data(
         &self,
         new_slot_value: ThreadStorageSlotValue,
         write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
@@ -233,7 +239,7 @@ impl ThreadStorageSlots {
     }
 
     /// allocate a storage slot given that the current storage buffer has no empty slots.
-    fn alloc_slot_no_free_slots(
+    fn alloc_no_free_slots(
         &self,
         encoded_initial_thread_state: EncodedThreadState,
         write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
@@ -250,13 +256,11 @@ impl ThreadStorageSlots {
         if cur_data.capacity == 0 {
             // no storage vector currently allocated, allocate a new one.
             // SAFETY: capacity is zero so the current buffer is empty
-            unsafe { self.alloc_slot_no_cur_data(new_slot_value, write_guard) }
+            unsafe { self.alloc_no_cur_data(new_slot_value, write_guard) }
         } else {
             // a storage vector is currently allocated, push a new entry into it.
             // SAFETY: capacity is non-zero so the current buffer is valid
-            unsafe {
-                self.alloc_slot_no_free_slots_grow_cur_data(new_slot_value, cur_data, write_guard)
-            }
+            unsafe { self.alloc_no_free_slots_grow_cur_data(new_slot_value, cur_data, write_guard) }
         }
     }
 
@@ -266,7 +270,7 @@ impl ThreadStorageSlots {
     /// # Safety
     ///
     /// may only be called if the current buffer is non-empty (capacity != 0)
-    unsafe fn alloc_slot_no_free_slots_grow_cur_data(
+    unsafe fn alloc_no_free_slots_grow_cur_data(
         &self,
         new_slot_value: ThreadStorageSlotValue,
         cur_data: &ThreadStorageSlotsCurData,
@@ -314,8 +318,7 @@ impl ThreadStorageSlots {
     /// # Safety
     ///
     /// the provided slot id must have been allocated using this instance, and must not have been freed since it was first allocated.
-    /// furthermore, this slot may no longer be used once this function returns (unless it is then re-allocated).
-    pub unsafe fn dealloc_slot(&self, slot_id: ThreadStorageSlotId) {
+    pub unsafe fn dealloc(&self, slot_id: ThreadStorageSlotId) {
         // synchronize with other writers. at any given point, only one writer can work.
         let _write_guard = self.write_lock.lock().unwrap();
 

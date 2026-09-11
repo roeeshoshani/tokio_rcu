@@ -260,8 +260,8 @@ use crate::{
     notify::Notify,
     per_thread_storage::{
         this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
-        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot,
-        this_thread_get_storage_slot_id, thread_storage_slot_get_all,
+        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
+        thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
 };
@@ -484,38 +484,41 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         let this_thread_storage_slot_id = this_thread_get_storage_slot_id();
 
         // check if all threads have seen our new epoch id
-        if thread_storage_slot_get_all().all(|(storage_slot_id, storage_slot)| {
-            if storage_slot_id == this_thread_storage_slot_id {
-                // this slot represents the current thread. no need to wait for ourselves.
-                //
-                // note that if we didn't do this, then our synchronize rcu implementation would always block at least once, due
-                // to having to yield at least once to let the current thread pass through a quiescent state.
-                // this would be very wasteful and unnecessarily slow.
-                return true;
-            }
-            let encoded_state = storage_slot.state.load(
-                // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
-                // pointed at by the rcu protected pointer happen before we see the store to the state.
-                // this is important in order to guarantee that we don't see those writes after we free the protected pointer, which will
-                // lead to a UAF.
-                atomic::Ordering::Acquire,
-            );
+        if thread_storage_slot_get_all()
+            .iter_enumerated()
+            .all(|(storage_slot_id, storage_slot)| {
+                if storage_slot_id == this_thread_storage_slot_id {
+                    // this slot represents the current thread. no need to wait for ourselves.
+                    //
+                    // note that if we didn't do this, then our synchronize rcu implementation would always block at least once, due
+                    // to having to yield at least once to let the current thread pass through a quiescent state.
+                    // this would be very wasteful and unnecessarily slow.
+                    return true;
+                }
+                let encoded_state = storage_slot.state.load(
+                    // we use acquire ordering paired with a release ordering for the store to make sure that the stores to the data
+                    // pointed at by the rcu protected pointer happen before we see the store to the state.
+                    // this is important in order to guarantee that we don't see those writes after we free the protected pointer, which will
+                    // lead to a UAF.
+                    atomic::Ordering::Acquire,
+                );
 
-            let Some(state) = ThreadState::decode(encoded_state) else {
-                // if the slot is empty, ignore it.
-                // it may at some point be allocated by some new thread that just started, but in this function we explicitly ignore
-                // new threads.
-                return true;
-            };
+                let Some(state) = ThreadState::decode(encoded_state) else {
+                    // if the slot is empty, ignore it.
+                    // it may at some point be allocated by some new thread that just started, but in this function we explicitly ignore
+                    // new threads.
+                    return true;
+                };
 
-            if !state.is_busy {
-                // this thread is currently not busy running any future.
-                // it may start running as soon as we finished checking it, but in this function we explicitly ignore non busy threads.
-                return true;
-            }
+                if !state.is_busy {
+                    // this thread is currently not busy running any future.
+                    // it may start running as soon as we finished checking it, but in this function we explicitly ignore non busy threads.
+                    return true;
+                }
 
-            last_seen_epoch_id_predicate(state.last_seen_epoch_id)
-        }) {
+                last_seen_epoch_id_predicate(state.last_seen_epoch_id)
+            })
+        {
             // all threads saw our new epoch id, we are done waiting
             break;
         }
@@ -557,7 +560,7 @@ fn on_thread_stop() {
 }
 
 fn on_thread_park() {
-    let storage_slot = this_thread_get_storage_slot();
+    let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
 
     // mark this thread as non-busy.
     storage_slot.state.fetch_and(
@@ -576,7 +579,7 @@ fn on_thread_park() {
 }
 
 fn on_thread_unpark() {
-    let storage_slot = this_thread_get_storage_slot();
+    let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
 
     // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
     //
@@ -599,7 +602,7 @@ fn on_thread_unpark() {
 }
 
 fn on_after_task_poll() {
-    let storage_slot = this_thread_get_storage_slot();
+    let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
     let new_seen_epoch_id = this_thread_see_new_epoch_id();
 
     // at this point we want to swap the current state with the new state.
