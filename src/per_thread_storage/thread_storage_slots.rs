@@ -147,18 +147,25 @@ impl ThreadStorageSlots {
         match free_slots.pop() {
             Some(free_slot_id) => {
                 // have a free slot in the existing storage, use it.
-                self.allocate_slot_from_free_slot(
-                    encoded_initial_thread_state,
-                    free_slot_id,
-                    &write_guard,
-                )
+                // SAFETY: the free slot id originated from the list of free slot ids.
+                unsafe {
+                    self.allocate_slot_from_free_slot(
+                        encoded_initial_thread_state,
+                        free_slot_id,
+                        &write_guard,
+                    )
+                }
             }
             None => self.allocate_slot_no_free_slots(encoded_initial_thread_state, write_guard),
         }
     }
 
     /// allocates a storage slot given a free slot in the existing storage buffer.
-    fn allocate_slot_from_free_slot(
+    ///
+    /// # Safety
+    ///
+    /// the provided storage slot must have originated from the list of free slot ids.
+    unsafe fn allocate_slot_from_free_slot(
         &self,
         encoded_initial_thread_state: EncodedThreadState,
         free_slot_id: ThreadStorageSlotId,
