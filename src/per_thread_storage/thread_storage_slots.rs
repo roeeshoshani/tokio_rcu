@@ -255,7 +255,7 @@ impl ThreadStorageSlots {
         } else {
             // a storage vector is currently allocated, push a new entry into it.
             // SAFETY: capacity is non-zero so the current buffer is valid
-            unsafe { self.alloc_no_free_slots_grow_cur_data(new_slot_value, cur_data, write_guard) }
+            unsafe { self.alloc_no_free_slots_grow_cur_data(new_slot_value, write_guard) }
         }
     }
 
@@ -268,9 +268,11 @@ impl ThreadStorageSlots {
     unsafe fn alloc_no_free_slots_grow_cur_data(
         &self,
         new_slot_value: ThreadStorageSlotValue,
-        cur_data: &ThreadStorageSlotsCurData,
         write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
+        // SAFETY: we are holding the write lock, so no one can write to this other than us.
+        let cur_data = unsafe { &*self.cur_data.get() };
+
         let len = cur_data.len.load(
             // ordering doesn't matter, we have exclusive access to this field due to the write lock
             atomic::Ordering::Relaxed,
