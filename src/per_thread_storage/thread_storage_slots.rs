@@ -363,3 +363,28 @@ impl<'a> Drop for ThreadStorageSlotsReadGuard<'a> {
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic;
+
+    use crate::{
+        epoch::EPOCH_ID_MIN, per_thread_storage::ThreadStorageSlots, thread_state::ThreadState,
+    };
+
+    #[test]
+    fn test_basic() {
+        let slots = ThreadStorageSlots::new();
+        let thread_state = ThreadState {
+            last_seen_epoch_id: EPOCH_ID_MIN,
+            is_busy: true,
+        };
+        let slot_id = slots.alloc(thread_state);
+        let read_guard = slots.read();
+        assert_eq!(
+            read_guard[slot_id].state.load(atomic::Ordering::Relaxed),
+            thread_state.encode()
+        );
+        unsafe { slots.dealloc(slot_id) };
+    }
+}
