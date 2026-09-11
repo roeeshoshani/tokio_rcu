@@ -321,7 +321,7 @@ impl<'a> Deref for ThreadStorageSlotsReadGuard<'a> {
     type Target = TypedSlice<ThreadStorageSlotId, ThreadStorageSlotValue>;
 
     fn deref(&self) -> &Self::Target {
-        // SAFETY: TODO
+        // SAFETY: we are holding a refcount to the data, so it won't be modified until we are dropped.
         unsafe { self.origin.cur_data_as_slice() }
     }
 }
