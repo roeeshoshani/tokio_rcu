@@ -320,6 +320,7 @@ static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 ///
 /// a quiescent state of a thread is defined as a state where the thread is not executing any user-defined task, and is instead executing
 /// code inside tokio's task scheduling logic.
+// TODO: update the docs to mention that it also waits for the calling thread.
 pub async fn synchronize_rcu() {
     // perform a membarrier to make sure that all other threads see the new rcu pointer.
     membarrier::perform();
@@ -384,9 +385,10 @@ pub async fn synchronize_rcu() {
                 // note that parked and not yet started threads are not relevant here, since once they wake up they will see the updated
                 // reset value of the epoch id due to the membarrier, and they will fetch and publish it along with the enabling of the
                 // busy flag as soon as they unpark.
-                wait_for_running_threads_to_see_epoch_id(|last_seen_epoch_id| {
-                    last_seen_epoch_id == EPOCH_ID_MIN
-                })
+                wait_for_running_threads_to_see_epoch_id(
+                    |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN,
+                    false,
+                )
                 .await;
 
                 // at this point, all running threads have reset their last seen epoch id, and new threads are guaranteed
@@ -437,9 +439,10 @@ pub async fn synchronize_rcu() {
 
     // note that parked and not-yet-started threads are irrelevant here since they are guaranteed to see the new pointer
     // due to the membarrier.
-    wait_for_running_threads_to_see_epoch_id(|last_seen_epoch_id| {
-        last_seen_epoch_id >= new_epoch_id
-    })
+    wait_for_running_threads_to_see_epoch_id(
+        |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
+        true,
+    )
     .await;
 
     // ensure that the reset sync read guard is held up until this point.
@@ -452,8 +455,10 @@ pub async fn synchronize_rcu() {
 /// which processes the last seen epoch id of each thread.
 ///
 /// this function does not take into account new threads just starting, nor new threads just existing the busy state.
+// TODO: update the docs to mention that it also waits for the calling thread.
 async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     last_seen_epoch_id_predicate: F,
+    including_self: bool,
 ) {
     loop {
         // start subscribing to the notified waiters event before checking the current state.
@@ -487,7 +492,8 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         if thread_storage_slot_get_all()
             .iter_enumerated()
             .all(|(storage_slot_id, storage_slot)| {
-                if storage_slot_id == this_thread_storage_slot_id {
+                if storage_slot_id == this_thread_storage_slot_id && !including_self {
+                    // TODO: update docs
                     // this slot represents the current thread. no need to wait for ourselves.
                     //
                     // note that if we didn't do this, then our synchronize rcu implementation would always block at least once, due
