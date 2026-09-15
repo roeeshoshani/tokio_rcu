@@ -70,7 +70,7 @@ impl<T> RcuPtrOldData<T> {
     /// function is not cancellation safe. if cancelled, it will leak the pointer and panic.
     pub async fn wait(self) -> Box<T> {
         // wait for all previous readers to stop using the old value
-        synchronize_rcu().await;
+        synchronize_rcu(true).await;
 
         // SAFETY: all existing readers finished using this pointers, so it is now exclusively ours.
         // also, pointers are always valid pointers to valid data by the invariants of the `RcuPtr` type.
@@ -153,7 +153,7 @@ macro_rules! impl_multiple_rcu_old_data_instances_for_tuple {
 
             async fn wait(self) -> Self::WaitResult {
                 // wait for all previous readers to stop using the old value
-                synchronize_rcu().await;
+                synchronize_rcu(true).await;
 
                 // SAFETY: all existing readers finished using this pointers, so it is now exclusively ours.
                 // also, pointers are always valid pointers to valid data by the invariants of the `RcuPtr` type.

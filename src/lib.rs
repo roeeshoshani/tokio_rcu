@@ -320,8 +320,20 @@ static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 ///
 /// a quiescent state of a thread is defined as a state where the thread is not executing any user-defined task, and is instead executing
 /// code inside tokio's task scheduling logic.
-// TODO: update the docs to mention that it also waits for the calling thread.
-pub async fn synchronize_rcu() {
+///
+/// if `include_calling_thread` is set, this function also waits for the calling thread itself to pass through quiescent state after the
+/// membarrier operation. this is usually not needed and should be set to `false`.
+/// this flag exists as a workaround to remove overhead from the fast-path of the rcu to the slow path.
+/// specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultanously
+/// holding a read guard to it on the same thread, for example by manually polling the swap future.
+/// making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
+/// synchronize rcu operation will never finish unless the caller actually passes through a quiescent state, at which point he can no
+/// longer be holding any read guards.
+/// a deadlock is not ideal, but this should never happen during proper use of this library anyway, and it prevents the UAF without
+/// adding overhead of checks in the fast path, which is a big win.
+/// also note that setting this flag means that the synchronize rcu operation will always yield at least once, to let the calling thread
+/// pass through a quiescent state, even if all threads immediately pass through a quiescent state after the membarrier.
+pub async fn synchronize_rcu(include_calling_thread: bool) {
     // perform a membarrier to make sure that all other threads see the new rcu pointer.
     membarrier::perform();
 
@@ -441,7 +453,7 @@ pub async fn synchronize_rcu() {
     // due to the membarrier.
     wait_for_running_threads_to_see_epoch_id(
         |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
-        true,
+        include_calling_thread,
     )
     .await;
 
@@ -455,10 +467,12 @@ pub async fn synchronize_rcu() {
 /// which processes the last seen epoch id of each thread.
 ///
 /// this function does not take into account new threads just starting, nor new threads just existing the busy state.
-// TODO: update the docs to mention that it also waits for the calling thread.
+///
+/// if `include_calling_thread` is set, this function also waits for the calling thread itself to see the updated epoch id as implemented
+/// in the given predicate. this is usually not needed and should be set to `false`. see [`synchronize_rcu`] for more info.
 async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     last_seen_epoch_id_predicate: F,
-    including_self: bool,
+    include_calling_thread: bool,
 ) {
     loop {
         // start subscribing to the notified waiters event before checking the current state.
@@ -492,13 +506,9 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         if thread_storage_slot_get_all()
             .iter_enumerated()
             .all(|(storage_slot_id, storage_slot)| {
-                if storage_slot_id == this_thread_storage_slot_id && !including_self {
-                    // TODO: update docs
-                    // this slot represents the current thread. no need to wait for ourselves.
-                    //
-                    // note that if we didn't do this, then our synchronize rcu implementation would always block at least once, due
-                    // to having to yield at least once to let the current thread pass through a quiescent state.
-                    // this would be very wasteful and unnecessarily slow.
+                if storage_slot_id == this_thread_storage_slot_id && !include_calling_thread {
+                    // this slot represents the current thread.
+                    // we may or may not need to wait for ourselves, depending on the caller's choice.
                     return true;
                 }
                 let encoded_state = storage_slot.state.load(
