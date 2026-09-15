@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_rcu::{rcu_block_on, rcu_ptr::RcuPtr};
+use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
 
 #[derive(Debug, Clone)]
 struct SharedState {
@@ -14,7 +14,7 @@ impl SharedState {
 
 fn main() {
     rcu_block_on(async move {
-        let state = Arc::new(RcuPtr::new(Box::new(SharedState { users: Vec::new() })));
+        let state = Arc::new(RcuBox::new(Box::new(SharedState { users: Vec::new() })));
 
         // spawn a bunch of readers which constantly read the data.
         let readers: Vec<_> = (0..16)
