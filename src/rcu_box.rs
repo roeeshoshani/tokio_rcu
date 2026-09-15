@@ -23,7 +23,7 @@ pub struct RcuBoxReadGuard<'a, T> {
     value: &'a T,
 
     /// the guard must not be sent as it is associated with thread local state related to the rcu book-keeping, where we track which
-    /// threads can use an old rcu box, while assuming that threads don't pass stale pointers between one another.
+    /// threads can use an old rcu pointer, while assuming that threads don't pass stale pointers between one another.
     _phantom: PhantomUnsend,
 }
 impl<'a, T> Deref for RcuBoxReadGuard<'a, T> {
@@ -190,6 +190,9 @@ impl_multiple_rcu_old_data_instances_for_tuple! {
 }
 
 /// an rcu box.
+///
+/// this is similar to a regular [`Box`], but an rcu box's value can be swapped while readers are simultaneously reading it, without
+/// requiring any locks, by relying on the rcu primitive.
 pub struct RcuBox<T> {
     value_ptr: AtomicPtr<T>,
 }
