@@ -204,19 +204,63 @@ impl<T> RcuPtr<T> {
 
     /// reads the rcu protected pointer and provides access to the data it currently points to.
     ///
-    /// this must only be called from a future running inside the tokio runtime.
-    ///
     /// the usage of the data is limited to the provided closure to prevent it from being used across await points, and to prevent it
     /// from escaping the calling function. this is needed to guarantee correct use of the rcu protected pointer.
+    ///
+    /// # Performance
+    ///
+    /// this function is very fast and cheap. other than calling the callback (which will probably be inlined into it), it only performs
+    /// a single atomic pointer load, plus one regular load of a non-shared thread local variable.
+    ///
+    /// if you really care about performance, consider using [`with_unchecked`](Self::with_unchecked) or [`read`](Self::read), which are
+    /// faster due to skipping some checks, at the cost of being unsafe.
+    ///
+    /// # Panics
+    ///
+    /// this function must only be called from a future running inside the tokio runtime, otherwise it will panic.
     #[inline(always)]
     pub fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&T) -> R,
     {
-        // SAFETY: the guard only lives throughout the current function.
-        // so, the future can't yield while holding it.
-        // and, it can't escape since the callback function F is an HRTB, so it can't assume anything about the lifetime of the provided
-        // reference.
+        assert!(
+            this_thread_does_have_allocated_storage_slot(),
+            "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime"
+        );
+
+        // SAFETY:
+        // - we checked that we are inside an rcu-tracked tokio worker thread
+        // - the guard only lives throughout the current function, so the future can't yield while holding it.
+        // - the guard can't escape since the callback function F is an HRTB, so it can't assume anything about the lifetime of
+        //   the provided reference.
+        let guard = unsafe { self.read() };
+
+        f(&*guard)
+    }
+
+    /// reads the rcu protected pointer and provides access to the data it currently points to.
+    ///
+    /// the usage of the data is limited to the provided closure to prevent it from being used across await points, and to prevent it
+    /// from escaping the calling function. this is needed to guarantee correct use of the rcu protected pointer.
+    ///
+    /// # Performance
+    ///
+    /// this function is very fast and cheap. other than calling the callback (which will probably be inlined into it), it only performs
+    /// a single atomic pointer load. that's it.
+    ///
+    /// # Safety
+    ///
+    /// this function must only be called from a future running inside the tokio runtime.
+    #[inline(always)]
+    pub unsafe fn with_unchecked<F, R>(&self, f: F) -> R
+    where
+        F: FnOnce(&T) -> R,
+    {
+        // SAFETY:
+        // - caller must guarantee that we are inside an rcu-tracked tokio worker thread
+        // - the guard only lives throughout the current function, so the future can't yield while holding it.
+        // - the guard can't escape since the callback function F is an HRTB, so it can't assume anything about the lifetime of
+        //   the provided reference.
         let guard = unsafe { self.read() };
 
         f(&*guard)
@@ -224,9 +268,13 @@ impl<T> RcuPtr<T> {
 
     /// reads the rcu protected pointer, returning a read guard to the data it currently points to.
     ///
-    /// this must only be called from a future running inside the tokio runtime.
+    /// # Performance
+    ///
+    /// this function is very fast and cheap. it only performs a single atomic pointer load. that's it.
     ///
     /// # Safety
+    ///
+    /// this must only be called from a future running inside the tokio runtime.
     ///
     /// the returned guard must not be held across await points, must not be held after the future that acquired it finishes,
     /// and must not escape that future's context (e.g. must not be saved inside a global variable and held across an await point
@@ -235,11 +283,6 @@ impl<T> RcuPtr<T> {
     /// as soon as the future that acquired this read guard gets to a point where it `await`s or finishes execution (basically any
     /// point which voluntarily yields the future), the guard must have already been dropped.
     pub unsafe fn read(&self) -> RcuPtrReadGuard<'_, T> {
-        assert!(
-            this_thread_does_have_allocated_storage_slot(),
-            "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime"
-        );
-
         let ptr = self.value_ptr.load(
             // we want acquire ordering to make sure that the write to the pointed-at data happens before the
             // write of the pointer itself, so that when we use the loaded pointer, we are guaranteed to get
