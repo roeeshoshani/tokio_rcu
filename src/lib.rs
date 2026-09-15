@@ -15,22 +15,23 @@
 //! apply to most other abstractions which can be implemented using the rcu primitive.
 //!
 //! this crate is speicifcally useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
-//! when a reader reads the rcu protected data, the read operation is basically just a single load of an atomic pointer.
-//! (plus a write to a non-shared thread local variable, which is only used to track misuse of the rcu primitive, and is negligible in
-//! terms of performance).
-//! no memory writes to shared data are performed, as opposed to spinlocks and mutexes which requires such memory writes, and sometimes
-//! even syscalls, just to access the underlying data.
+//! when a reader reads the rcu protected data (e.g. using [`RcuPtr::read`]), the read operation is only a single load of an atomic
+//! pointer. that's it. no branches, no book-keeping, just a single pointer load. it is basically the fastest a read can get.
+//!
+//! during a read operation, no memory writes are performed, as opposed to spinlocks and mutexes which requires memory writes to shared
+//! data, and sometimes even syscalls, just to access the underlying data.
 //!
 //! specifically, for read-mostly data, the cache line containing the pointer can be shared between all readers, and the read operation
-//! basically becomes a single load from the cpu cache (plus the aforementioned negligible thread-local write).
+//! becomes just a single load from the cpu cache, which is extremely fast.
 //! compared to spinlocks and mutexes which usually require exclusive ownership over the cacheline due to writes and other atomic
 //! operations, this is much faster and provides much better reader latency.
 //!
 //! also note that the time spent on a read operation is very predictable and static. other users of the data, such as concurrent readers
-//! and even writers, do not affect the time it takes for a reader to read the data. a read is always the same amount of operations.
-//! specifically a writer can slightly delay this load due to invalidating the cacheline containing the rcu protected pointer when writing
-//! to it, but this is mostly negligible.
-//! this can be very important in latency-critical applications which require a high-performance fast path with predictable latency.
+//! and even writers, do not affect the time it takes for a reader to read the data. a read is always just a single pointer load.
+//! specifically a writer can slightly delay this load due to invalidating the cacheline containing the rcu protected pointer when
+//! writing to it, but this is mostly negligible.
+//! this consistency of the read operation can be very important in latency-critical applications which require a high-performance
+//! fast path with predictable latency.
 //!
 //! also see [benchmnarks](#benchmarks).
 //!
@@ -145,11 +146,11 @@
 //! │  ├─ 32                                65.75 ms      │ 81.64 ms      │ 68.5 ms       │ 69.41 ms      │ 100     │ 100
 //! │  ╰─ 64                                129.5 ms      │ 137.9 ms      │ 132.6 ms      │ 132.5 ms      │ 100     │ 100
 //! ├─ rcu_ptr_read_only                                  │               │               │               │         │
-//! │  ├─ 1                                 7.322 ms      │ 28.86 ms      │ 11.49 ms      │ 13.23 ms      │ 100     │ 100
-//! │  ├─ 8                                 8.782 ms      │ 15.87 ms      │ 9.6 ms        │ 10.24 ms      │ 100     │ 100
-//! │  ├─ 16                                10.04 ms      │ 16.07 ms      │ 10.48 ms      │ 10.59 ms      │ 100     │ 100
-//! │  ├─ 32                                16.04 ms      │ 20.69 ms      │ 16.69 ms      │ 17.5 ms       │ 100     │ 100
-//! │  ╰─ 64                                31.18 ms      │ 38.09 ms      │ 32.9 ms       │ 33.63 ms      │ 100     │ 100
+//! │  ├─ 1                                 1.042 ms      │ 7.554 ms      │ 4.998 ms      │ 4.282 ms      │ 100     │ 100
+//! │  ├─ 8                                 1.138 ms      │ 6.34 ms       │ 2.505 ms      │ 2.8 ms        │ 100     │ 100
+//! │  ├─ 16                                1.802 ms      │ 5.718 ms      │ 3.373 ms      │ 3.462 ms      │ 100     │ 100
+//! │  ├─ 32                                1.837 ms      │ 5.772 ms      │ 2.103 ms      │ 2.43 ms       │ 100     │ 100
+//! │  ╰─ 64                                3.227 ms      │ 5.033 ms      │ 3.467 ms      │ 3.511 ms      │ 100     │ 100
 //! ├─ arc_swap_read_while_writing                        │               │               │               │         │
 //! │  ├─ 1 reader tasks, 1 writer tasks    24.7 ms       │ 33.48 ms      │ 26.03 ms      │ 26.49 ms      │ 100     │ 100
 //! │  ├─ 8 reader tasks, 1 writer tasks    30.04 ms      │ 43.33 ms      │ 33.75 ms      │ 34.59 ms      │ 100     │ 100
@@ -161,15 +162,15 @@
 //! │  ├─ 64 reader tasks, 1 writer tasks   130.2 ms      │ 140.5 ms      │ 134.1 ms      │ 134 ms        │ 100     │ 100
 //! │  ╰─ 64 reader tasks, 2 writer tasks   131 ms        │ 145.5 ms      │ 136 ms        │ 136 ms        │ 100     │ 100
 //! ├─ rcu_ptr_read_while_writing                         │               │               │               │         │
-//! │  ├─ 1 reader tasks, 1 writer tasks    7.907 ms      │ 12.98 ms      │ 8.422 ms      │ 8.755 ms      │ 100     │ 100
-//! │  ├─ 8 reader tasks, 1 writer tasks    9.129 ms      │ 17.74 ms      │ 10 ms         │ 10.26 ms      │ 100     │ 100
-//! │  ├─ 8 reader tasks, 2 writer tasks    9.387 ms      │ 12.91 ms      │ 10.03 ms      │ 10.23 ms      │ 100     │ 100
-//! │  ├─ 16 reader tasks, 1 writer tasks   11 ms         │ 14.48 ms      │ 11.16 ms      │ 11.31 ms      │ 100     │ 100
-//! │  ├─ 16 reader tasks, 2 writer tasks   11.21 ms      │ 13.17 ms      │ 11.37 ms      │ 11.5 ms       │ 100     │ 100
-//! │  ├─ 32 reader tasks, 1 writer tasks   17.22 ms      │ 22.5 ms       │ 17.78 ms      │ 18.6 ms       │ 100     │ 100
-//! │  ├─ 32 reader tasks, 2 writer tasks   17.19 ms      │ 22.42 ms      │ 18.16 ms      │ 18.85 ms      │ 100     │ 100
-//! │  ├─ 64 reader tasks, 1 writer tasks   33.22 ms      │ 38.55 ms      │ 34.12 ms      │ 35.01 ms      │ 100     │ 100
-//! │  ╰─ 64 reader tasks, 2 writer tasks   33.38 ms      │ 38.62 ms      │ 34.79 ms      │ 35.45 ms      │ 100     │ 100
+//! │  ├─ 1 reader tasks, 1 writer tasks    1.071 ms      │ 2.557 ms      │ 1.258 ms      │ 1.37 ms       │ 100     │ 100
+//! │  ├─ 8 reader tasks, 1 writer tasks    1.372 ms      │ 3.63 ms       │ 2.005 ms      │ 2.125 ms      │ 100     │ 100
+//! │  ├─ 8 reader tasks, 2 writer tasks    1.799 ms      │ 4.349 ms      │ 2.501 ms      │ 2.676 ms      │ 100     │ 100
+//! │  ├─ 16 reader tasks, 1 writer tasks   1.554 ms      │ 3.639 ms      │ 1.791 ms      │ 1.927 ms      │ 100     │ 100
+//! │  ├─ 16 reader tasks, 2 writer tasks   1.672 ms      │ 3.988 ms      │ 2.025 ms      │ 2.049 ms      │ 100     │ 100
+//! │  ├─ 32 reader tasks, 1 writer tasks   1.884 ms      │ 4.099 ms      │ 2.433 ms      │ 2.439 ms      │ 100     │ 100
+//! │  ├─ 32 reader tasks, 2 writer tasks   1.978 ms      │ 5.538 ms      │ 2.75 ms       │ 2.776 ms      │ 100     │ 100
+//! │  ├─ 64 reader tasks, 1 writer tasks   3.316 ms      │ 7.614 ms      │ 3.976 ms      │ 3.978 ms      │ 100     │ 100
+//! │  ╰─ 64 reader tasks, 2 writer tasks   3.38 ms       │ 5.551 ms      │ 4.476 ms      │ 4.313 ms      │ 100     │ 100
 //! ├─ arc_swap_write_while_reading                       │               │               │               │         │
 //! │  ├─ 1 reader tasks, 1 writer tasks    455.3 µs      │ 852.4 µs      │ 517.6 µs      │ 565.2 µs      │ 100     │ 100
 //! │  ├─ 1 reader tasks, 8 writer tasks    558.8 µs      │ 3.202 ms      │ 814.3 µs      │ 900.5 µs      │ 100     │ 100
@@ -183,21 +184,21 @@
 //! │  ├─ 32 reader tasks, 32 writer tasks  4.504 ms      │ 10.46 ms      │ 6.464 ms      │ 6.322 ms      │ 100     │ 100
 //! │  ╰─ 64 reader tasks, 64 writer tasks  10.1 ms       │ 18.84 ms      │ 12.01 ms      │ 12.27 ms      │ 100     │ 100
 //! ╰─ rcu_ptr_write_while_reading                        │               │               │               │         │
-//!    ├─ 1 reader tasks, 1 writer tasks    818.2 µs      │ 3.266 ms      │ 1.275 ms      │ 1.458 ms      │ 100     │ 100
-//!    ├─ 1 reader tasks, 8 writer tasks    2.283 ms      │ 11.61 ms      │ 2.724 ms      │ 3.751 ms      │ 100     │ 100
-//!    ├─ 1 reader tasks, 16 writer tasks   2.801 ms      │ 7.454 ms      │ 2.966 ms      │ 3.294 ms      │ 100     │ 100
-//!    ├─ 1 reader tasks, 32 writer tasks   3.042 ms      │ 199 ms        │ 3.792 ms      │ 34.18 ms      │ 100     │ 100
-//!    ├─ 1 reader tasks, 64 writer tasks   3.328 ms      │ 199.2 ms      │ 6.99 ms       │ 53.64 ms      │ 100     │ 100
-//!    ├─ 2 reader tasks, 2 writer tasks    1.769 ms      │ 3.773 ms      │ 2.059 ms      │ 2.097 ms      │ 100     │ 100
-//!    ├─ 4 reader tasks, 8 writer tasks    2.543 ms      │ 11.66 ms      │ 3.055 ms      │ 3.992 ms      │ 100     │ 100
-//!    ├─ 8 reader tasks, 8 writer tasks    3.249 ms      │ 6.313 ms      │ 3.452 ms      │ 3.606 ms      │ 100     │ 100
-//!    ├─ 16 reader tasks, 16 writer tasks  5.776 ms      │ 10.99 ms      │ 6.268 ms      │ 6.458 ms      │ 100     │ 100
-//!    ├─ 32 reader tasks, 32 writer tasks  10.09 ms      │ 16.99 ms      │ 12.66 ms      │ 12.29 ms      │ 100     │ 100
-//!    ╰─ 64 reader tasks, 64 writer tasks  15.13 ms      │ 67.13 ms      │ 18.01 ms      │ 18.84 ms      │ 100     │ 100
+//!    ├─ 1 reader tasks, 1 writer tasks    469.3 µs      │ 1.348 ms      │ 560.7 µs      │ 613.7 µs      │ 100     │ 100
+//!    ├─ 1 reader tasks, 8 writer tasks    793.3 µs      │ 5.803 ms      │ 1.625 ms      │ 1.762 ms      │ 100     │ 100
+//!    ├─ 1 reader tasks, 16 writer tasks   818.5 µs      │ 64.52 ms      │ 974.4 µs      │ 2.677 ms      │ 100     │ 100
+//!    ├─ 1 reader tasks, 32 writer tasks   902.6 µs      │ 201.1 ms      │ 4.016 ms      │ 18.98 ms      │ 100     │ 100
+//!    ├─ 1 reader tasks, 64 writer tasks   1.127 ms      │ 199.1 ms      │ 4.997 ms      │ 42.88 ms      │ 100     │ 100
+//!    ├─ 2 reader tasks, 2 writer tasks    688.2 µs      │ 2.18 ms       │ 830.8 µs      │ 894.1 µs      │ 100     │ 100
+//!    ├─ 4 reader tasks, 8 writer tasks    1.319 ms      │ 11.02 ms      │ 2.552 ms      │ 3.249 ms      │ 100     │ 100
+//!    ├─ 8 reader tasks, 8 writer tasks    2.701 ms      │ 3.951 ms      │ 2.894 ms      │ 2.976 ms      │ 100     │ 100
+//!    ├─ 16 reader tasks, 16 writer tasks  6.441 ms      │ 20.34 ms      │ 6.93 ms       │ 7.283 ms      │ 100     │ 100
+//!    ├─ 32 reader tasks, 32 writer tasks  10.39 ms      │ 53.25 ms      │ 12.4 ms       │ 13.93 ms      │ 100     │ 100
+//!    ╰─ 64 reader tasks, 64 writer tasks  16.02 ms      │ 66.2 ms       │ 17.43 ms      │ 20.22 ms      │ 100     │ 100
 //! ```
 //!
-//! as you can see, `tokio_rcu`'s reads are faster than `arc_swap`'s reads (about 3x faster on average), while `tokio_rcu`'s writes
-//! are slower than `arc_swap`'s writes (about 3x times slower on average). for a read-heavy situation, this is ideal.
+//! as you can see, `tokio_rcu`'s reads are faster than `arc_swap`'s reads (about 6x-40x faster on average), while `tokio_rcu`'s writes
+//! are slower than `arc_swap`'s writes (about 2x-10x slower on average). for a read-heavy situation, this is ideal.
 //!
 //! furthermore, note that when using `arc_swap`, the time it takes for a single read operation seems to scale with the number of
 //! concurrent readers (see the results of the `arc_swap_read_only` and `arc_swap_read_while_writing` benchmarks), while `tokio_rcu`'s
@@ -210,7 +211,7 @@
 //! `arc_swap_read_while_writing`).
 //!
 //! moreover, while `tokio_rcu`'s writes are slower, it is mostly because the writers are sleeping while waiting for other threads to
-//! pass through a quiescent state, so they are not slower in the sense that they perform more cpu-bound work, only the total time it
+//! pass through a quiescent state, so they are NOT slower in the sense that they perform more cpu-bound work, only in the total time it
 //! takes for a swap operation to complete after fully awaiting it. in practice the writes may actually spend less cpu time than
 //! `arc_swap`'s write.
 //!
@@ -253,6 +254,7 @@
 //!
 //! [`on_after_task_poll`]: tokio::runtime::Builder::on_after_task_poll
 //! [`RcuPtr`]: rcu_ptr::RcuPtr
+//! [`RcuPtr::read`]: rcu_ptr::RcuPtr::read
 use std::{sync::atomic, task::Poll};
 
 use crate::{
@@ -324,7 +326,7 @@ static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 /// if `include_calling_thread` is set, this function also waits for the calling thread itself to pass through quiescent state after the
 /// membarrier operation. this is usually not needed and should be set to `false`.
 /// this flag exists as a workaround to remove overhead from the fast-path of the rcu to the slow path.
-/// specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultanously
+/// specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
 /// holding a read guard to it on the same thread, for example by manually polling the swap future.
 /// making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
 /// synchronize rcu operation will never finish unless the caller actually passes through a quiescent state, at which point he can no

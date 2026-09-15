@@ -272,6 +272,8 @@ impl<T> RcuPtr<T> {
     ///
     /// this function is very fast and cheap. it only performs a single atomic pointer load. that's it.
     ///
+    /// for a safe alternative with a very small amount of added overhead, see [`with`](Self::with).
+    ///
     /// # Safety
     ///
     /// this must only be called from a future running inside the tokio runtime.
