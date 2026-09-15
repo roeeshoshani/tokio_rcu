@@ -352,5 +352,12 @@ impl<T> Drop for RcuBox<T> {
         let _ = unsafe { Box::from_raw(ptr) };
     }
 }
+
+/// sending an rcu box to another thread sends the owned inner `T` data to that thread, so it requires `T: Send`.
 unsafe impl<T: Send> Send for RcuBox<T> {}
-unsafe impl<T: Sync> Sync for RcuBox<T> {}
+
+/// sending a `&RcuBox<T>` to another thread allows that thread to both read the inner `T` data as a `&T`, and also to get full ownership
+/// over the current `T` value by swapping it with a new value.
+/// so, it requires both sharing `&T` instances with other threads, which requires `T: Sync`, and it also requires being able to send
+/// owned `T` values to other threads (due to [`swap`](RcuBox::swap) related functions), which requires `T: Send`.
+unsafe impl<T: Send + Sync> Sync for RcuBox<T> {}
