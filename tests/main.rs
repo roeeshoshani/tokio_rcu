@@ -1,8 +1,8 @@
 use std::{hint::black_box, sync::Arc, time::Duration};
 
-use tokio_rcu::{TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_ptr::RcuPtr};
+use tokio_rcu::{TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_box::RcuBox};
 
-/// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu protected pointer.
+/// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
 #[test]
 fn no_uaf_during_stress() {
     const NUM_READER_TASKS: usize = 64;
@@ -14,7 +14,7 @@ fn no_uaf_during_stress() {
         let initial_string = "<VALID> initial string";
         let final_string = "<VALID> final string";
 
-        let data = Arc::new(RcuPtr::new(Box::new(String::from(initial_string))));
+        let data = Arc::new(RcuBox::new(Box::new(String::from(initial_string))));
         let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
             .map(|_| {
                 tokio::spawn({
@@ -86,7 +86,7 @@ fn no_uaf_during_stress() {
     })
 }
 
-/// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu protected pointer with sleeps
+/// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box with sleeps
 /// introduced in between.
 /// this is specifically important for checking the race where a waiter sees some worker thread as sleeping, but the worker
 /// thread wakes up immediately and starts using the pointer.
@@ -118,7 +118,7 @@ fn no_uaf_with_sleeps() {
             let initial_string = "<VALID> initial string";
             let final_string = "<VALID> final string";
 
-            let data = Arc::new(RcuPtr::new(Box::new(String::from(initial_string))));
+            let data = Arc::new(RcuBox::new(Box::new(String::from(initial_string))));
             let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
                 .map(|_| {
                     tokio::spawn({
@@ -209,7 +209,7 @@ fn enable_rcu_multiple_calls() {
     unsafe {
         // SAFETY: we called `enable_rcu`
         rt.rcu_block_on(async move {
-            let state = Arc::new(RcuPtr::new(Box::new(String::from(
+            let state = Arc::new(RcuBox::new(Box::new(String::from(
                 "some interesting string",
             ))));
             let reader = tokio::spawn({
@@ -255,7 +255,7 @@ fn enable_rcu_multiple_runtimes() {
     };
 
     let logic = || async move {
-        let state = Arc::new(RcuPtr::new(Box::new(String::from(
+        let state = Arc::new(RcuBox::new(Box::new(String::from(
             "some interesting string",
         ))));
         let reader = tokio::spawn({
@@ -309,7 +309,7 @@ fn double_buffering() {
             should_readers_exit: false,
         });
 
-        let data = Arc::new(RcuPtr::new(buf_a));
+        let data = Arc::new(RcuBox::new(buf_a));
 
         let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
             .map(|_| {

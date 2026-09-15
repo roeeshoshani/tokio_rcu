@@ -8,7 +8,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use tokio_rcu::{rcu_block_on, rcu_ptr::RcuPtr};
+use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
 
 fn main() {
     divan::main();
@@ -23,9 +23,9 @@ const NUM_WRITE_ITERATIONS: usize = 8;
 const READ_ONLY_BENCH_NUM_TASKS_ARGS: &[usize] = &[1, 8, 16, 32, 64];
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
-fn read_only_rcu_ptr(num_tasks: usize) {
+fn read_only_rcu_box(num_tasks: usize) {
     rcu_block_on(async move {
-        let data = Arc::new(RcuPtr::new(Box::new(0)));
+        let data = Arc::new(RcuBox::new(Box::new(0)));
         let tasks: Vec<_> = (0..num_tasks)
             .map(move |_| {
                 tokio::spawn({
@@ -126,9 +126,9 @@ const READ_WHILE_WRITING_BENCH_CFGS: &[ReadWhileWritingBenchCfg] = &[
 ];
 
 #[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
-fn read_while_writing_rcu_ptr(cfg: ReadWhileWritingBenchCfg) {
+fn read_while_writing_rcu_box(cfg: ReadWhileWritingBenchCfg) {
     rcu_block_on(async move {
-        let data = Arc::new(RcuPtr::new(Box::new(0)));
+        let data = Arc::new(RcuBox::new(Box::new(0)));
         let readers: Vec<_> = (0..cfg.num_reader_tasks)
             .map({
                 let data = data.clone();
@@ -299,9 +299,9 @@ const WRITE_WHILE_READING_BENCH_CFGS: &[WriteWhileReadingBenchCfg] = &[
 ];
 
 #[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
-fn write_while_reading_rcu_ptr(cfg: WriteWhileReadingBenchCfg) {
+fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
     rcu_block_on(async move {
-        let data = Arc::new(RcuPtr::new(Box::new(0)));
+        let data = Arc::new(RcuBox::new(Box::new(0)));
         let writers: Vec<_> = (0..cfg.num_reader_tasks)
             .map({
                 let data = data.clone();

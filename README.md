@@ -11,15 +11,16 @@ the core primitive provided by this crate is [`synchronize_rcu`](https://docs.rs
 linux kernel - it waits for an rcu grace period, which allows writers to track when exactly they can reclaim swapped out data.
 
 the low level [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/fn.synchronize_rcu.html) primitive can be used to build a bunch of higher level abstractions.
-the simplest abstraction - a single pointer to shared data - is implemented in this crate by the [`RcuPtr`] type.
+one very simple abstraction - a single pointer to a heap-allocated piece of shared data (an "rcu box") - is implemented in this crate
+by the [`RcuBox`] type.
 
 ## performance
 
-NOTE: this section specifically refers to [`RcuPtr`], the main high level abstraction provided by this crate, but will probably also
+NOTE: this section specifically refers to [`RcuBox`], the main high level abstraction provided by this crate, but will probably also
 apply to most other abstractions which can be implemented using the rcu primitive.
 
 this crate is speicifcally useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
-when a reader reads the rcu protected data (e.g. using [`RcuPtr::read`]), the read operation is only a single load of an atomic
+when a reader reads the data stored in an rcu box (e.g. using [`RcuBox::read`]), the read operation is only a single load of an atomic
 pointer. that's it. no branches, no book-keeping, just a single pointer load. it is basically the fastest a read can get.
 
 during a read operation, no memory writes are performed, as opposed to spinlocks and mutexes which requires memory writes to shared
@@ -42,19 +43,19 @@ also see [benchmnarks](#benchmarks).
 ## quick start
 
 ```rust
-use tokio_rcu::{rcu_block_on, rcu_ptr::RcuPtr};
+use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
 
 fn main() {
     rcu_block_on(async move {
-        let numbers = RcuPtr::new(Box::new(vec![1, 2, 3, 4]));
+        let numbers = RcuBox::new(Box::new(vec![1, 2, 3, 4]));
 
-        // rcu protected values can be accessed using the `with` function.
+        // the rcu box's data can safely be accessed using the `with` function.
         numbers.with(|numbers| {
             assert!(numbers.contains(&3));
             assert!(!numbers.contains(&5));
         });
 
-        // the rcu protected value can be modified while readers are using it.
+        // the rcu box's data can be modified while readers are using it.
         // and, the old allocation is returned.
         let new_numbers = Box::new(vec![5, 6, 7, 8]);
         let _old_numbers: Box<Vec<i32>> = numbers.swap(new_numbers).await;
@@ -81,7 +82,7 @@ finish using that pointer, to avoid a UAF (use-after-free) situation.
 
 this problem can be solved in many ways, but rcu usually solves it by defining a state called a "quiescent state", such that when
 a specific execution context (which can be a cpu core, or an OS thread) reaches that quiescent state, it is guaranteed to not hold
-any rcu protected pointer.
+any rcu-protected pointer.
 
 in this specific crate, the execution contexts are tokio threads, and the quiescent state was chosen to be tokio's
 [`on_after_task_poll`] hook.
@@ -149,7 +150,7 @@ comparison                              fastest       │ slowest       │ medi
 │  ├─ 16                                38.22 ms      │ 44.77 ms      │ 43.65 ms      │ 42.8 ms       │ 100     │ 100
 │  ├─ 32                                65.91 ms      │ 75.48 ms      │ 68.38 ms      │ 69.26 ms      │ 100     │ 100
 │  ╰─ 64                                129.6 ms      │ 137.4 ms      │ 133.1 ms      │ 132.9 ms      │ 100     │ 100
-├─ read_only_rcu_ptr                                  │               │               │               │         │
+├─ read_only_rcu_box                                  │               │               │               │         │
 │  ├─ 1                                 1.005 ms      │ 6.71 ms       │ 1.806 ms      │ 2.63 ms       │ 100     │ 100
 │  ├─ 8                                 1.193 ms      │ 7.442 ms      │ 2.384 ms      │ 2.733 ms      │ 100     │ 100
 │  ├─ 16                                1.29 ms       │ 4.381 ms      │ 2.521 ms      │ 2.626 ms      │ 100     │ 100
@@ -165,7 +166,7 @@ comparison                              fastest       │ slowest       │ medi
 │  ├─ 32 reader tasks, 2 writer tasks   69.12 ms      │ 88.03 ms      │ 72.5 ms       │ 74.51 ms      │ 100     │ 100
 │  ├─ 64 reader tasks, 1 writer tasks   130.8 ms      │ 140 ms        │ 134.5 ms      │ 134.5 ms      │ 100     │ 100
 │  ╰─ 64 reader tasks, 2 writer tasks   131.8 ms      │ 143.1 ms      │ 136.8 ms      │ 136.5 ms      │ 100     │ 100
-├─ read_while_writing_rcu_ptr                         │               │               │               │         │
+├─ read_while_writing_rcu_box                         │               │               │               │         │
 │  ├─ 1 reader tasks, 1 writer tasks    1.09 ms       │ 4.477 ms      │ 1.415 ms      │ 1.822 ms      │ 100     │ 100
 │  ├─ 8 reader tasks, 1 writer tasks    1.445 ms      │ 5.593 ms      │ 2.373 ms      │ 2.724 ms      │ 100     │ 100
 │  ├─ 8 reader tasks, 2 writer tasks    1.692 ms      │ 4.929 ms      │ 2.576 ms      │ 2.769 ms      │ 100     │ 100
@@ -187,7 +188,7 @@ comparison                              fastest       │ slowest       │ medi
 │  ├─ 16 reader tasks, 16 writer tasks  1.845 ms      │ 10.21 ms      │ 2.272 ms      │ 3.091 ms      │ 100     │ 100
 │  ├─ 32 reader tasks, 32 writer tasks  4.576 ms      │ 12.01 ms      │ 6.949 ms      │ 6.731 ms      │ 100     │ 100
 │  ╰─ 64 reader tasks, 64 writer tasks  10.51 ms      │ 22.3 ms       │ 12.26 ms      │ 12.6 ms       │ 100     │ 100
-╰─ write_while_reading_rcu_ptr                        │               │               │               │         │
+╰─ write_while_reading_rcu_box                        │               │               │               │         │
    ├─ 1 reader tasks, 1 writer tasks    494.8 µs      │ 1.73 ms       │ 570.5 µs      │ 628.4 µs      │ 100     │ 100
    ├─ 1 reader tasks, 8 writer tasks    801.8 µs      │ 7.725 ms      │ 2.019 ms      │ 2.388 ms      │ 100     │ 100
    ├─ 1 reader tasks, 16 writer tasks   872.4 µs      │ 73.89 ms      │ 1.671 ms      │ 3.982 ms      │ 100     │ 100
@@ -211,7 +212,7 @@ are more readers than cpu cores (more than 20 reader tasks), at which point the 
 their runtime, which obviously takes its toll on the performance.
 
 also note that this constant time for the read operation holds even when writers are concurrently modifying the data - the time
-spent on a single read operation remains roughly the same (see `rcu_ptr_read_while_writing`), unlike `arc_swap` (see
+spent on a single read operation remains roughly the same (see `rcu_box_read_while_writing`), unlike `arc_swap` (see
 `arc_swap_read_while_writing`).
 
 moreover, while `tokio_rcu`'s writes are slower, it is mostly because the writers are sleeping while waiting for other threads to
@@ -257,7 +258,7 @@ more platforms can be added in the future if needed, and given that they have a 
 This project is licensed under the MIT license.
 
 [`on_after_task_poll`]: https://docs.rs/tokio/latest/tokio/runtime/builder/struct.Builder.html#method.on_after_task_poll
-[`RcuPtr`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_ptr/struct.RcuPtr.html
-[`RcuPtr::read`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_ptr/struct.RcuPtr.html#method.read
+[`RcuBox`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_box/struct.RcuBox.html
+[`RcuBox::read`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_box/struct.RcuBox.html#method.read
 
 <!-- cargo-rdme end -->

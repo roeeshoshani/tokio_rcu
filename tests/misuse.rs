@@ -8,10 +8,10 @@ use std::{
     time::Duration,
 };
 
-use tokio_rcu::{rcu_block_on, rcu_ptr::RcuPtr};
+use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
 
 const USE_OUTSIDE_OF_RCU_ENABLED_RUNTIME_ERR: &str =
-    "attempted to read an rcu protected pointer outside of an rcu-enabled tokio runtime";
+    "attempted to read an rcu box outside of an rcu-enabled tokio runtime";
 const SWAP_FUTURE_CANT_BE_DROPPED_ERR: &str =
     "can't be dropped since concurrent readers may be using it. it must first be waited for.";
 const CANT_START_RUNTIME_INSIDE_RUNTIME_ERR: &str = "Cannot start a runtime from within a runtime";
@@ -39,20 +39,20 @@ fn assert_panics_with_use_outside_of_rcu_enabled_runtime_err<F: FnOnce() + Unwin
 
 #[test]
 fn read_outside_of_runtime() {
-    let x = RcuPtr::new(Box::new(String::from("some interesting piece of text")));
+    let x = RcuBox::new(Box::new(String::from("some interesting piece of text")));
     assert_panics_with_use_outside_of_rcu_enabled_runtime_err(|| x.with(|_| {}));
 }
 
 #[tokio::test]
 async fn read_in_non_rcu_runtime() {
-    let x = RcuPtr::new(Box::new(String::from("some interesting piece of text")));
+    let x = RcuBox::new(Box::new(String::from("some interesting piece of text")));
     assert_panics_with_use_outside_of_rcu_enabled_runtime_err(|| x.with(|_| {}));
 }
 
 #[test]
 fn read_from_non_runtime_thread_spawned_inside_runtime() {
     rcu_block_on(async {
-        let x = RcuPtr::new(Box::new(String::from("some interesting piece of text")));
+        let x = RcuBox::new(Box::new(String::from("some interesting piece of text")));
         std::thread::spawn(move || {
             assert_panics_with_use_outside_of_rcu_enabled_runtime_err(|| x.with(|_| {}));
         })
@@ -63,7 +63,7 @@ fn read_from_non_runtime_thread_spawned_inside_runtime() {
 
 #[test]
 fn read_from_main_thread_after_runtime_finished() {
-    let x = Arc::new(RcuPtr::new(Box::new(String::from(
+    let x = Arc::new(RcuBox::new(Box::new(String::from(
         "some interesting piece of text",
     ))));
     rcu_block_on({
@@ -76,16 +76,16 @@ fn read_from_main_thread_after_runtime_finished() {
 #[test]
 fn swap_inside_with_by_manually_polling_never_finishes() {
     rcu_block_on(async {
-        let rcu_ptr = Arc::new(RcuPtr::new(Box::new(String::from(
+        let rcu_box = Arc::new(RcuBox::new(Box::new(String::from(
             "some interesting piece of text",
         ))));
-        rcu_ptr.with({
-            let rcu_ptr = rcu_ptr.clone();
+        rcu_box.with({
+            let rcu_box = rcu_box.clone();
             move |value| {
                 // the code below panics due to dropping the swap future before it finishes.
                 let err = std::panic::catch_unwind(AssertUnwindSafe(move || {
                     let swap_future =
-                        rcu_ptr.swap(Box::new(String::from("hopefully this doesnt work")));
+                        rcu_box.swap(Box::new(String::from("hopefully this doesnt work")));
                     let mut swap_future_pin = pin!(swap_future);
                     let mut cx = std::task::Context::from_waker(Waker::noop());
 
@@ -116,11 +116,11 @@ fn swap_inside_with_by_manually_polling_never_finishes() {
 #[test]
 fn swap_inside_with_using_new_current_thread_runtime() {
     rcu_block_on(async {
-        let rcu_ptr = Arc::new(RcuPtr::new(Box::new(String::from(
+        let rcu_box = Arc::new(RcuBox::new(Box::new(String::from(
             "some interesting piece of text",
         ))));
-        rcu_ptr.with({
-            let rcu_ptr = rcu_ptr.clone();
+        rcu_box.with({
+            let rcu_box = rcu_box.clone();
             move |value| {
                 let err = std::panic::catch_unwind(AssertUnwindSafe(move || {
                     tokio::runtime::Builder::new_current_thread()
@@ -128,7 +128,7 @@ fn swap_inside_with_using_new_current_thread_runtime() {
                         .build()
                         .unwrap()
                         .block_on(async move {
-                            rcu_ptr
+                            rcu_box
                                 .swap(Box::new(String::from("hopefully this doesnt work")))
                                 .await;
                         });
