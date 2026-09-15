@@ -23,7 +23,7 @@ const NUM_WRITE_ITERATIONS: usize = 8;
 const READ_ONLY_BENCH_NUM_TASKS_ARGS: &[usize] = &[1, 8, 16, 32, 64];
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
-fn rcu_ptr_read_only(num_tasks: usize) {
+fn read_only_rcu_ptr(num_tasks: usize) {
     rcu_block_on(async move {
         let data = Arc::new(RcuPtr::new(Box::new(0)));
         let tasks: Vec<_> = (0..num_tasks)
@@ -48,7 +48,7 @@ fn rcu_ptr_read_only(num_tasks: usize) {
 }
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
-fn arc_swap_read_only(num_tasks: usize) {
+fn read_only_arc_swap(num_tasks: usize) {
     rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let tasks: Vec<_> = (0..num_tasks)
@@ -126,7 +126,7 @@ const READ_WHILE_WRITING_BENCH_CFGS: &[ReadWhileWritingBenchCfg] = &[
 ];
 
 #[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
-fn rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
+fn read_while_writing_rcu_ptr(cfg: ReadWhileWritingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(RcuPtr::new(Box::new(0)));
         let readers: Vec<_> = (0..cfg.num_reader_tasks)
@@ -182,7 +182,7 @@ fn rcu_ptr_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
 }
 
 #[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
-fn arc_swap_read_while_writing(cfg: ReadWhileWritingBenchCfg) {
+fn read_while_writing_arc_swap(cfg: ReadWhileWritingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let readers: Vec<_> = (0..cfg.num_reader_tasks)
@@ -299,7 +299,7 @@ const WRITE_WHILE_READING_BENCH_CFGS: &[WriteWhileReadingBenchCfg] = &[
 ];
 
 #[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
-fn rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
+fn write_while_reading_rcu_ptr(cfg: WriteWhileReadingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(RcuPtr::new(Box::new(0)));
         let writers: Vec<_> = (0..cfg.num_reader_tasks)
@@ -357,7 +357,7 @@ fn rcu_ptr_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
 }
 
 #[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
-fn arc_swap_write_while_reading(cfg: WriteWhileReadingBenchCfg) {
+fn write_while_reading_arc_swap(cfg: WriteWhileReadingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let writers: Vec<_> = (0..cfg.num_reader_tasks)
