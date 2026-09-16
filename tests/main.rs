@@ -1,6 +1,16 @@
-use std::{hint::black_box, sync::Arc, time::Duration};
+use std::{
+    hint::black_box,
+    sync::{
+        Arc,
+        atomic::{self, AtomicBool},
+    },
+    time::Duration,
+};
 
-use tokio_rcu::{TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_box::RcuBox};
+use tokio::sync::Notify;
+use tokio_rcu::{
+    TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_box::RcuBox, synchronize_rcu,
+};
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
 #[test]
@@ -360,5 +370,41 @@ fn double_buffering() {
         for task in reader_tasks {
             task.await.unwrap();
         }
+    })
+}
+
+/// blocking threads have a weird relationship with the rcu book-keeping.
+/// they do call some of tokio's hooks, but not all.
+/// this test makes sure that the rcu grace period doesn't wait for blocking threads, only worker threads.
+/// if the grace period would wait for blocking threads, it would block forever as long as any blocking thread exists.
+#[test]
+fn synchronize_rcu_while_blocking_thread_exists() {
+    rcu_block_on(async {
+        let thread_started_notify = Arc::new(Notify::new());
+        let should_stop = Arc::new(AtomicBool::new(false));
+
+        // start listening for events from the thread before we spawn it
+        let thread_started = thread_started_notify.notified();
+
+        let blocking_task = tokio::task::spawn_blocking({
+            let should_stop = should_stop.clone();
+            let thread_started_notify = thread_started_notify.clone();
+            move || {
+                thread_started_notify.notify_waiters();
+                while !should_stop.load(atomic::Ordering::Relaxed) {
+                    std::thread::sleep(Duration::from_secs(1));
+                }
+            }
+        });
+
+        // don't perform the synchronize rcu until we know that the thread started, otherwise it will just skip it and not
+        // test what we actually want.
+        thread_started.await;
+
+        synchronize_rcu(true).await;
+
+        should_stop.store(true, atomic::Ordering::Relaxed);
+
+        blocking_task.await.unwrap();
     })
 }
