@@ -113,7 +113,7 @@
 //! but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
 //! which are called very often.
 //!
-//! specifically, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic loads and stores,
+//! for example, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic loads and stores,
 //! and is unnoticeable in terms of performance.
 //!
 //! # other async runtimes
@@ -564,21 +564,22 @@ fn this_thread_see_new_epoch_id() -> EpochId {
     )
 }
 
-fn on_thread_start() {
-    assert!(!this_thread_does_have_allocated_storage_slot());
-    let epoch_id = this_thread_see_new_epoch_id();
-    this_thread_alloc_storage_slot(ThreadState {
-        last_seen_epoch_id: epoch_id,
-        is_busy: true,
-    });
-}
-
 fn on_thread_stop() {
-    assert!(this_thread_does_have_allocated_storage_slot());
+    // note that at this point, this thread may or may not have a slot allocated to it.
+    // this hook is called by both tokio worker threads, and tokio blocking threads.
+    // blocking threads will not have a slot at all, since we only allocate a slot in the `on_before_task_poll` hook.
+    // tokio worker threads may or may not have a slot, depending on whether they have polled any task throughout their
+    // lifetime.
     this_thread_dealloc_storage_slot();
 }
 
 fn on_thread_park() {
+    // the `on_thread_park` hook may be called before a slot is allocated, since a slot is only allocated in `on_before_task_poll`,
+    // but a worker thread may decide to park even before polling its first future, for example if there are no tasks to be executed by it.
+    if !this_thread_does_have_allocated_storage_slot() {
+        return;
+    }
+
     {
         let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
 
@@ -600,6 +601,13 @@ fn on_thread_park() {
 }
 
 fn on_thread_unpark() {
+    // the `on_thread_unpark` hook may be called before a slot is allocated, since a slot is only allocated in `on_before_task_poll`,
+    // but a worker thread may decide to park (and then unpark) even before polling its first future, for example if there are no tasks to
+    // be executed by it.
+    if !this_thread_does_have_allocated_storage_slot() {
+        return;
+    }
+
     // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
     //
     // this is needed for the case where a reset operation was performed since we last went to sleep.
@@ -620,6 +628,23 @@ fn on_thread_unpark() {
         // this is needed since we actually fetch a new epoch id here, not only set the busy flag.
         atomic::Ordering::Release,
     );
+}
+
+fn on_before_task_poll() {
+    // note that we only allocate in the `on_before_task_poll` hook, instead of the more reasonable `on_thread_start` hook,
+    // since the `on_thread_start` hook is also called by blocking threads, but we only want to account for tokio worker
+    // threads in our rcu book-keeping.
+    // and, the `on_before_task_poll` hook is obviously only called for tokio worker threads, so it is the ideal place to
+    // perform the slot allocation.
+    if this_thread_does_have_allocated_storage_slot() {
+        return;
+    }
+
+    let epoch_id = this_thread_see_new_epoch_id();
+    this_thread_alloc_storage_slot(ThreadState {
+        last_seen_epoch_id: epoch_id,
+        is_busy: true,
+    });
 }
 
 fn on_after_task_poll() {
@@ -694,8 +719,8 @@ impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
         assert!(membarrier::is_supported());
         membarrier::register();
 
-        self.on_thread_start(|| {
-            on_thread_start();
+        self.on_before_task_poll(|_| {
+            on_before_task_poll();
         })
         .on_thread_stop(|| {
             on_thread_stop();
@@ -787,8 +812,6 @@ impl<F: Future> Future for RcuRootFuture<F> {
     ) -> Poll<Self::Output> {
         if !self.has_already_been_polled {
             // first time being polled on the main thread.
-            // mark the thread's start.
-            on_thread_start();
 
             // SAFETY: we don't move out of anything
             unsafe { self.as_mut().get_unchecked_mut().has_already_been_polled = true }
@@ -801,6 +824,9 @@ impl<F: Future> Future for RcuRootFuture<F> {
             // this is basically an unpark.
             on_thread_unpark();
         }
+
+        // before polling the task
+        on_before_task_poll();
 
         // SAFETY: we do not move out of anything, we just project a field, which is safe
         let inner_future = unsafe { self.map_unchecked_mut(|x| &mut x.inner_future) };

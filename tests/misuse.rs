@@ -146,3 +146,15 @@ fn swap_inside_with_using_new_current_thread_runtime() {
         })
     });
 }
+
+#[test]
+fn read_from_blocking_pool_thread() {
+    rcu_block_on(async {
+        let x = RcuBox::new(Box::new(String::from("some interesting piece of text")));
+        tokio::task::spawn_blocking(move || {
+            assert_panics_with_use_outside_of_rcu_enabled_runtime_err(|| x.with(|_| {}));
+        })
+        .await
+        .unwrap();
+    })
+}
