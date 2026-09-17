@@ -574,6 +574,12 @@ fn on_thread_stop() {
 }
 
 fn on_thread_park() {
+    // the `on_thread_park` hook may be called before a slot is allocated, since a slot is only allocated in `on_before_task_poll`,
+    // but a worker thread may decide to park even before polling its first future, for example if there are no tasks to be executed by it.
+    if !this_thread_does_have_allocated_storage_slot() {
+        return;
+    }
+
     {
         let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
 
@@ -595,6 +601,13 @@ fn on_thread_park() {
 }
 
 fn on_thread_unpark() {
+    // the `on_thread_unpark` hook may be called before a slot is allocated, since a slot is only allocated in `on_before_task_poll`,
+    // but a worker thread may decide to park (and then unpark) even before polling its first future, for example if there are no tasks to
+    // be executed by it.
+    if !this_thread_does_have_allocated_storage_slot() {
+        return;
+    }
+
     // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
     //
     // this is needed for the case where a reset operation was performed since we last went to sleep.
