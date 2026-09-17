@@ -117,7 +117,7 @@ specifically, this crate uses tokio hooks (e.g. [`on_after_task_poll`]) to track
 but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
 which are called very often.
 
-specifically, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic loads and stores,
+for example, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic loads and stores,
 and is unnoticeable in terms of performance.
 
 ## other async runtimes
