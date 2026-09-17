@@ -1,5 +1,7 @@
 use std::sync::atomic;
 
+use branches::unlikely;
+
 use crate::atomic_type::Atomic;
 
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
@@ -102,7 +104,7 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
             // SAFETY: in this case we know that adding 2 does not overflow, since this is the success case
             let new_epoch_id = unsafe { prev_epoch_id.unchecked_add(2) };
 
-            if new_epoch_id > EpochId::MAX - 2 {
+            if unlikely(new_epoch_id > EpochId::MAX - 2) {
                 // sanity
                 debug_assert_eq!(new_epoch_id, EPOCH_ID_MAX);
 

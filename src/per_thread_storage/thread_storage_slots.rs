@@ -5,6 +5,7 @@ use std::{
     sync::atomic::{self, AtomicUsize},
 };
 
+use branches::likely;
 use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
 
 use crate::{
@@ -283,7 +284,7 @@ impl ThreadStorageSlots {
         let mut new_data: TypedVec<ThreadStorageSlotId, ThreadStorageSlotValue> =
             unsafe { TypedVec::from_raw_parts_unchecked(cur_data.ptr, len, cur_data.capacity) };
 
-        if len < cur_data.capacity {
+        if likely(len < cur_data.capacity) {
             // no-reallocation needed, we can push into the vec and it won't re-alloc.
             let new_slot_id = new_data
                 .try_push(new_slot_value)
