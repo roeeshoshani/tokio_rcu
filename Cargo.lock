@@ -24,6 +24,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
 
 [[package]]
+name = "branches"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fff8e8a78270a39fea587b71eb20cdb5d80a16f692ecdec704f789f8904d003"
+
+[[package]]
 name = "bytes"
 version = "1.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -402,6 +408,7 @@ name = "tokio_rcu"
 version = "0.2.0"
 dependencies = [
  "arc-swap",
+ "branches",
  "divan",
  "index_type",
  "libc",

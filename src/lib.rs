@@ -278,6 +278,7 @@ pub mod rcu_box;
 mod thread_state;
 mod utils;
 
+use branches::{likely, unlikely};
 use tokio::runtime::RuntimeFlavor;
 
 /// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful
@@ -509,7 +510,9 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         if thread_storage_slot_get_all()
             .iter_enumerated()
             .all(|(storage_slot_id, storage_slot)| {
-                if storage_slot_id == this_thread_storage_slot_id && !include_calling_thread {
+                if !include_calling_thread
+                    && unlikely(storage_slot_id == this_thread_storage_slot_id)
+                {
                     // this slot represents the current thread.
                     // we may or may not need to wait for ourselves, depending on the caller's choice.
                     return true;
@@ -576,7 +579,7 @@ fn on_thread_stop() {
 fn on_thread_park() {
     // the `on_thread_park` hook may be called before a slot is allocated, since a slot is only allocated in `on_before_task_poll`,
     // but a worker thread may decide to park even before polling its first future, for example if there are no tasks to be executed by it.
-    if !this_thread_does_have_allocated_storage_slot() {
+    if unlikely(!this_thread_does_have_allocated_storage_slot()) {
         return;
     }
 
@@ -604,7 +607,7 @@ fn on_thread_unpark() {
     // the `on_thread_unpark` hook may be called before a slot is allocated, since a slot is only allocated in `on_before_task_poll`,
     // but a worker thread may decide to park (and then unpark) even before polling its first future, for example if there are no tasks to
     // be executed by it.
-    if !this_thread_does_have_allocated_storage_slot() {
+    if unlikely(!this_thread_does_have_allocated_storage_slot()) {
         return;
     }
 
@@ -636,7 +639,7 @@ fn on_before_task_poll() {
     // threads in our rcu book-keeping.
     // and, the `on_before_task_poll` hook is obviously only called for tokio worker threads, so it is the ideal place to
     // perform the slot allocation.
-    if this_thread_does_have_allocated_storage_slot() {
+    if likely(this_thread_does_have_allocated_storage_slot()) {
         return;
     }
 
@@ -693,7 +696,7 @@ fn on_after_task_poll() {
     // we are expected to be in the busy state while not parked
     debug_assert!(prev_state.is_busy);
 
-    if prev_state.last_seen_epoch_id != new_seen_epoch_id {
+    if unlikely(prev_state.last_seen_epoch_id != new_seen_epoch_id) {
         // if the last seen epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.
         THREAD_EPOCH_UPDATED_NOTIFY.notify();
     }
@@ -806,11 +809,15 @@ impl<F> RcuRootFuture<F> {
 impl<F: Future> Future for RcuRootFuture<F> {
     type Output = F::Output;
 
+    // #[inline] is important here since it increases the chance that some of the redundant branches performed in this function
+    // will be eliminated, for example the `has_already_been_polled` branch, which is only used to track the first call to
+    // `poll` and can easily be eliminated by unrolling the first iteration of the poll loop.
+    #[inline]
     fn poll(
         mut self: std::pin::Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> Poll<Self::Output> {
-        if !self.has_already_been_polled {
+        if unlikely(!self.has_already_been_polled) {
             // first time being polled on the main thread.
 
             // SAFETY: we don't move out of anything
