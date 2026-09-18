@@ -1,5 +1,4 @@
 use std::{
-    any::Any,
     hint::black_box,
     panic::{AssertUnwindSafe, UnwindSafe},
     pin::pin,
@@ -8,23 +7,13 @@ use std::{
     time::Duration,
 };
 
-use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
+use tokio_rcu::{rcu_block_on, rcu_box::RcuBox, test_utils::extract_string_panic_message};
 
 const USE_OUTSIDE_OF_RCU_ENABLED_RUNTIME_ERR: &str =
     "attempted to read an rcu box outside of an rcu-enabled tokio runtime";
 const SWAP_FUTURE_CANT_BE_DROPPED_ERR: &str =
     "can't be dropped since concurrent readers may be using it. it must first be waited for.";
 const CANT_START_RUNTIME_INSIDE_RUNTIME_ERR: &str = "Cannot start a runtime from within a runtime";
-
-fn extract_string_panic_message(err: Box<dyn Any + Send>) -> String {
-    if let Some(s) = err.downcast_ref::<&str>() {
-        s.to_string()
-    } else if let Some(s) = err.downcast_ref::<String>() {
-        s.clone()
-    } else {
-        panic!("failed to downcast panic message payload")
-    }
-}
 
 fn assert_panics_with_use_outside_of_rcu_enabled_runtime_err<F: FnOnce() + UnwindSafe>(f: F) {
     let err = std::panic::catch_unwind(move || {

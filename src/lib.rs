@@ -275,6 +275,8 @@ mod membarrier;
 mod notify;
 mod per_thread_storage;
 pub mod rcu_box;
+#[doc(hidden)]
+pub mod test_utils;
 mod thread_state;
 mod utils;
 
