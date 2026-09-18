@@ -485,11 +485,11 @@ mod tests {
             let notified1 = pin!(notify.notified());
             let notified2 = pin!(notify.notified());
 
-            let waker1 = unsafe { Waker::new(1 as *const (), &WAKER_VTABLE) };
+            let waker1 = unsafe { Waker::new(0x10 as *const (), &WAKER_VTABLE) };
             let mut ctx1 = std::task::Context::from_waker(&waker1);
             assert_eq!(notified1.poll(&mut ctx1), Poll::Pending);
 
-            let waker2 = unsafe { Waker::new(2 as *const (), &WAKER_VTABLE) };
+            let waker2 = unsafe { Waker::new(0x20 as *const (), &WAKER_VTABLE) };
             let mut ctx2 = std::task::Context::from_waker(&waker2);
             assert_eq!(notified2.poll(&mut ctx2), Poll::Pending);
 
@@ -515,7 +515,7 @@ mod tests {
         // extra scope to scope the lifetime of the pinned notified value.
         {
             let notified_final = pin!(notify.notified());
-            let waker_final = unsafe { Waker::new(1 as *const (), &WAKER_VTABLE) };
+            let waker_final = unsafe { Waker::new(0x10 as *const (), &WAKER_VTABLE) };
             let mut ctx_final = std::task::Context::from_waker(&waker_final);
 
             // accessing the the stale waker list by polling a new notified future should not work
@@ -529,8 +529,8 @@ mod tests {
             // it wasn't inserted into the list, since the lock was poisoned.
         }
 
-        // and, finally, dropping the notify object itself while in a poisoned state should also not cause any problems.
-        drop(notify);
+        // and, finally, once this scope ends the notify object itself will be dropped, and dropping the notify object itself while in
+        // a poisoned state should also not cause any problems.
     }
 
     #[test]
@@ -555,7 +555,7 @@ mod tests {
             let good_notified = pin!(notify.notified());
             let bad_notified = pin!(notify.notified());
 
-            let good_waker = unsafe { Waker::new(1 as *const (), &WAKER_VTABLE) };
+            let good_waker = unsafe { Waker::new(0x10 as *const (), &WAKER_VTABLE) };
             let mut good_ctx = std::task::Context::from_waker(&good_waker);
             assert_eq!(good_notified.poll(&mut good_ctx), Poll::Pending);
 
@@ -583,7 +583,7 @@ mod tests {
         // extra scope to scope the lifetime of the pinned notified value.
         {
             let notified_final = pin!(notify.notified());
-            let waker_final = unsafe { Waker::new(1 as *const (), &WAKER_VTABLE) };
+            let waker_final = unsafe { Waker::new(0x10 as *const (), &WAKER_VTABLE) };
             let mut ctx_final = std::task::Context::from_waker(&waker_final);
 
             // accessing the the stale waker list by polling a new notified future should not work
@@ -597,7 +597,7 @@ mod tests {
             // it wasn't inserted into the list, since the lock was poisoned.
         }
 
-        // and, finally, dropping the notify object itself while in a poisoned state should also not cause any problems.
-        drop(notify);
+        // and, finally, once this scope ends the notify object itself will be dropped, and dropping the notify object itself while in
+        // a poisoned state should also not cause any problems.
     }
 }
