@@ -503,7 +503,75 @@ mod tests {
             // when this scope ends, both notified values will be dropped, even though one of them is still in the notify's waker list.
         }
 
-        // the list now contains stale pointers pointing to dead value, make sure it can't accidentally be accessed, which would be UB.
+        // the list now contains stale pointers pointing to dead values, make sure it can't accidentally be accessed, which would be UB.
+
+        // accessing the the stale waker list by calling `notify` should not work
+        let err = std::panic::catch_unwind(AssertUnwindSafe(|| {
+            notify.notify();
+        }))
+        .unwrap_err();
+        assert!(extract_string_panic_message(err).contains("PoisonError"));
+
+        // extra scope to scope the lifetime of the pinned notified value.
+        {
+            let notified_final = pin!(notify.notified());
+            let waker_final = unsafe { Waker::new(1 as *const (), &WAKER_VTABLE) };
+            let mut ctx_final = std::task::Context::from_waker(&waker_final);
+
+            // accessing the the stale waker list by polling a new notified future should not work
+            let err = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                assert_eq!(notified_final.poll(&mut ctx_final), Poll::Pending);
+            }))
+            .unwrap_err();
+            assert!(extract_string_panic_message(err).contains("PoisonError"));
+
+            // dropping the notified that we failed to poll should behave just fine.
+            // it wasn't inserted into the list, since the lock was poisoned.
+        }
+
+        // and, finally, dropping the notify object itself while in a poisoned state should also not cause any problems.
+        drop(notify);
+    }
+
+    #[test]
+    fn waker_clone_panic() {
+        unsafe fn waker_clone(x: *const ()) -> RawWaker {
+            if x == (0xbad as *const ()) {
+                panic!("waker clone called");
+            }
+            RawWaker::new(x, &WAKER_VTABLE)
+        }
+        unsafe fn waker_wake(_x: *const ()) {}
+        unsafe fn waker_wake_by_ref(_x: *const ()) {}
+        unsafe fn waker_drop(_x: *const ()) {}
+
+        const WAKER_VTABLE: RawWakerVTable =
+            RawWakerVTable::new(waker_clone, waker_wake, waker_wake_by_ref, waker_drop);
+
+        let notify = Notify::new();
+
+        // extra scope to scope the lifetime of the pinned notified values.
+        {
+            let good_notified = pin!(notify.notified());
+            let bad_notified = pin!(notify.notified());
+
+            let good_waker = unsafe { Waker::new(1 as *const (), &WAKER_VTABLE) };
+            let mut good_ctx = std::task::Context::from_waker(&good_waker);
+            assert_eq!(good_notified.poll(&mut good_ctx), Poll::Pending);
+
+            let bad_waker = unsafe { Waker::new(0xbad as *const (), &WAKER_VTABLE) };
+            let mut bad_ctx = std::task::Context::from_waker(&bad_waker);
+
+            let err =
+                std::panic::catch_unwind(AssertUnwindSafe(|| bad_notified.poll(&mut bad_ctx)))
+                    .unwrap_err();
+            assert!(extract_string_panic_message(err).contains("waker clone called"));
+
+            // when this scope ends, both notified values will be dropped, even though the good one is still in the notify's waker list
+            // and will remain in that list due to the lock being poisoned.
+        }
+
+        // the list now contains a stale pointer pointing to a dead value, make sure it can't accidentally be accessed, which would be UB.
 
         // accessing the the stale waker list by calling `notify` should not work
         let err = std::panic::catch_unwind(AssertUnwindSafe(|| {
