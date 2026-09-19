@@ -242,6 +242,8 @@
 //!
 //! # platform support
 //!
+//! TODO: update docs once i finish removing all membarrier calls
+//!
 //! currently, this crate only works on linux and windows.
 //!
 //! the limitation stems from the membarrier operation, which is currently only implemented for linux (using the membarrier syscall),
@@ -271,6 +273,7 @@ use crate::{
 
 mod atomic_type;
 mod epoch;
+// TODO: remove this module once i am done removing all membarrier calls
 mod membarrier;
 mod notify;
 mod per_thread_storage;
@@ -316,6 +319,7 @@ static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::
 /// operation is done.
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 
+// TODO: update docs once i finish removing all membarrier calls
 /// wait for an RCU grace period.
 ///
 /// this function first performs a membarrier to synchronize all previous writes performed by the current thread with all other
@@ -343,6 +347,7 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
     // TODO: explain
     atomic::fence(atomic::Ordering::SeqCst);
 
+    // TODO: update docs now that membarrier is gone
     // after the membarrier, all threads are guaranteed to have seen our new pointer.
     // we only need to wait for any potential existing users of the old pointer to finish using it.
     //
@@ -457,6 +462,7 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
 
     // note that parked and not-yet-started threads are irrelevant here since they are guaranteed to see the new pointer
     // due to the membarrier.
+    // TODO: update docs above, no longer membarrier
     wait_for_running_threads_to_see_epoch_id(
         |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
         include_calling_thread,
