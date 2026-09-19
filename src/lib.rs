@@ -340,8 +340,8 @@ static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 /// also note that setting this flag means that the synchronize rcu operation will always yield at least once, to let the calling thread
 /// pass through a quiescent state, even if all threads immediately pass through a quiescent state after the membarrier.
 pub async fn synchronize_rcu(include_calling_thread: bool) {
-    // perform a membarrier to make sure that all other threads see the new rcu pointer.
-    membarrier::perform();
+    // TODO: explain
+    atomic::fence(atomic::Ordering::SeqCst);
 
     // after the membarrier, all threads are guaranteed to have seen our new pointer.
     // we only need to wait for any potential existing users of the old pointer to finish using it.
@@ -633,6 +633,9 @@ fn on_thread_unpark() {
         // this is needed since we actually fetch a new epoch id here, not only set the busy flag.
         atomic::Ordering::Release,
     );
+
+    // TODO: explain
+    atomic::fence(atomic::Ordering::SeqCst);
 }
 
 fn on_before_task_poll() {
@@ -650,6 +653,9 @@ fn on_before_task_poll() {
         last_seen_epoch_id: epoch_id,
         is_busy: true,
     });
+
+    // TODO: explain
+    atomic::fence(atomic::Ordering::SeqCst);
 }
 
 fn on_after_task_poll() {
