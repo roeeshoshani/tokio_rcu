@@ -29,7 +29,6 @@ impl ThreadState {
             None
         } else {
             let last_seen_epoch_id = (encoded & (!1)) as EpochId;
-            debug_assert_ne!(last_seen_epoch_id, 0);
 
             Some(Self {
                 last_seen_epoch_id,
@@ -41,7 +40,6 @@ impl ThreadState {
     /// encodes the given thread state into its packed form.
     #[inline]
     pub fn encode(self) -> EncodedThreadState {
-        debug_assert_ne!(self.last_seen_epoch_id, 0);
         debug_assert_eq!(self.last_seen_epoch_id & 1, 0);
 
         let result =
