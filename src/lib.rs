@@ -335,24 +335,6 @@ static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 /// also note that setting this flag means that the synchronize rcu operation will always yield at least once, to let the calling thread
 /// pass through a quiescent state, even if all threads immediately pass through a quiescent state after the membarrier.
 pub async fn synchronize_rcu(include_calling_thread: bool) {
-    // TODO: explain
-    atomic::fence(atomic::Ordering::SeqCst);
-
-    // TODO: update docs now that membarrier is gone
-    // after the membarrier, all threads are guaranteed to have seen our new pointer.
-    // we only need to wait for any potential existing users of the old pointer to finish using it.
-    //
-    // note that due to the membarrier, we don't need to worry about just-starting threads or just-unparking threads which
-    // may access the old pointer.
-    //
-    // if during the check below, we see that some thread is currently parked, or we don't see the slot of some just-started
-    // thread, then it means that this thread's update of its own state happens strictly after the membarrier, and the state
-    // update always happens before polling the future, so there's no way for the polled future to see the old pointer.
-    // the relationship is:
-    // pointer swap -> membarrier -> thread's update of his own state -> thread's load of the rcu protected pointer
-    // thus, all such threads are guaranteed to see the new pointer, and we can thus ignore them when waiting for all existing
-    // users.
-
     // lock the reset sync lock for reading.
     //
     // this ensures that if any reset operation is currently ongoing, we don't interrupt it by incremented the epoch id while it
@@ -373,7 +355,12 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
     // we can then sample their published last seen epoch id to know when they saw our increment, and once they did, we know that they
     // passed through a quiescent state.
     let new_epoch_id = match epoch_id_inc() {
-        Ok(v) => v,
+        Ok(new_epoch_id) => {
+            // TODO: explain
+            atomic::fence(atomic::Ordering::SeqCst);
+
+            new_epoch_id
+        }
         Err(err) => {
             // epoch id overflow.
 
@@ -448,6 +435,8 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
                 // the epoch id should take some time to grow before it wraps around again.
                 panic!("overflow when incrementing epoch id after reset")
             };
+
+            // TODO: do we need another SC fence here?
 
             new_epoch_id
         }
