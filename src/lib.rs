@@ -400,8 +400,8 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
                 // reset the epoch id
                 epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
 
-                // make sure that all threads see the reset of the epoch id.
-                membarrier::perform();
+                // TODO: explain, and update docs below
+                atomic::fence(atomic::Ordering::SeqCst);
 
                 // wait for all threads to update their last seen epoch id to the reset value.
                 //
@@ -621,6 +621,21 @@ fn on_thread_unpark() {
         return;
     }
 
+    let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
+
+    storage_slot.state.store(
+        ThreadState {
+            last_seen_epoch_id: 0,
+            is_busy: true,
+        }
+        .encode(),
+        // TODO: ordering
+        atomic::Ordering::Release,
+    );
+
+    // TODO: explain this
+    atomic::fence(atomic::Ordering::SeqCst);
+
     // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
     //
     // this is needed for the case where a reset operation was performed since we last went to sleep.
@@ -629,7 +644,6 @@ fn on_thread_unpark() {
     // though in practice we didn't really see his epoch id increment.
     let new_seen_epoch_id = this_thread_see_new_epoch_id();
 
-    let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
     storage_slot.state.store(
         ThreadState {
             last_seen_epoch_id: new_seen_epoch_id,
@@ -642,6 +656,7 @@ fn on_thread_unpark() {
         atomic::Ordering::Release,
     );
 
+    // TODO: is this still needed with the new code, and with the SC fence added above?
     // TODO: explain
     atomic::fence(atomic::Ordering::SeqCst);
 }
@@ -656,12 +671,27 @@ fn on_before_task_poll() {
         return;
     }
 
-    let epoch_id = this_thread_see_new_epoch_id();
-    this_thread_alloc_storage_slot(ThreadState {
-        last_seen_epoch_id: epoch_id,
+    let slot_id = this_thread_alloc_storage_slot(ThreadState {
+        last_seen_epoch_id: 0,
         is_busy: true,
     });
 
+    // TODO: explain
+    atomic::fence(atomic::Ordering::SeqCst);
+
+    let epoch_id = this_thread_see_new_epoch_id();
+
+    thread_storage_slot_get_all()[slot_id].state.store(
+        ThreadState {
+            last_seen_epoch_id: epoch_id,
+            is_busy: true,
+        }
+        .encode(),
+        // TODO: ordering
+        atomic::Ordering::Relaxed,
+    );
+
+    // TODO: is this still needed with the new code, and with the SC fence added above?
     // TODO: explain
     atomic::fence(atomic::Ordering::SeqCst);
 }

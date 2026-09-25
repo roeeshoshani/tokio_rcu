@@ -59,12 +59,15 @@ impl OwnedThreadStorageSlot {
 
     /// allocates a new slot for the current thread, if one is not already allocated.
     /// if a slot is already allocated, this function does nothing.
-    pub fn alloc(&self, initial_thread_state: ThreadState) {
-        if self.id.get().is_some() {
-            return;
+    ///
+    /// returns the id of the new allocated slot, or the id of the existing slot if there is one.
+    pub fn alloc(&self, initial_thread_state: ThreadState) -> ThreadStorageSlotId {
+        if let Some(existing_id) = self.id.get() {
+            return existing_id;
         }
         let id = THREAD_STORAGE_SLOTS.alloc(initial_thread_state);
         self.id.set(Some(id));
+        id
     }
 
     /// deallocates the current slot, if any.
@@ -104,7 +107,7 @@ pub fn this_thread_does_have_allocated_storage_slot() -> bool {
 }
 
 /// allocates a storage slot for the current thread, if one is not already allocated.
-pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) {
+pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) -> ThreadStorageSlotId {
     THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.alloc(initial_thread_state))
 }
 
