@@ -447,6 +447,8 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
                 panic!("another epoch id reset right after the previous reset")
             });
 
+            // TODO: explain why another increment is even needed here. especially for the leader case. is it even needed?
+
             let Ok(new_epoch_id) = epoch_id_inc() else {
                 // avoid poisoning the lock
                 drop(reset_sync_read_guard);
