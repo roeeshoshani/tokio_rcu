@@ -310,6 +310,20 @@ static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::
 /// operation is done.
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 
+/// this function just performs an SC fence, but it provides special guarantees when performed directly after modifying the global
+/// epoch id.
+///
+/// performing an SC fence after a global epoch id modification, combined with the SC fences in the thread-start and thread-wake
+/// paths (for example, see the SC fence in [`on_thread_unpark`]), provides the guarantee that for every thread other than the calling thread,
+/// if we check this thread's state after this fence, either we see that other thread as busy, or he sees our epoch id modification and any
+/// operation performed before it once his fence is over.
+///
+/// this then allows us to only consider busy threads when later waiting for threads to see our incremented epoch id.
+#[inline(always)]
+fn post_epoch_id_modification_sc_fence() {
+    atomic::fence(atomic::Ordering::SeqCst);
+}
+
 // TODO: update docs once i finish removing all membarrier calls
 /// wait for an RCU grace period.
 ///
@@ -344,7 +358,7 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
     //
     // this also ensures that a reset operation is not initiated while we are still waiting for threads to see our incremented epoch id,
     // since we hold this until we finish waiting.
-    let mut reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
+    let reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
 
     // increment the epoch id.
     //
@@ -354,12 +368,22 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
     //
     // we can then sample their published last seen epoch id to know when they saw our increment, and once they did, we know that they
     // passed through a quiescent state.
-    let new_epoch_id = match epoch_id_inc() {
+    match epoch_id_inc() {
         Ok(new_epoch_id) => {
-            // TODO: explain
-            atomic::fence(atomic::Ordering::SeqCst);
+            post_epoch_id_modification_sc_fence();
 
-            new_epoch_id
+            // wait for all threads to see the new epoch id.
+            // we only need to consider busy threads thanks to the SC fence.
+            wait_for_running_threads_to_see_epoch_id(
+                |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
+                include_calling_thread,
+            )
+            .await;
+
+            // ensure that the reset sync read guard is held up until this point.
+            // this is important to make sure that a reset operation is not initiated while we are still waiting for threads to see our new
+            // epoch id, otherwise we would keep waiting until the next overflow of the epoch id.
+            drop(reset_sync_read_guard);
         }
         Err(err) => {
             // epoch id overflow.
@@ -378,14 +402,10 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
                 // reset the epoch id
                 epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
 
-                // TODO: explain, and update docs below
-                atomic::fence(atomic::Ordering::SeqCst);
+                post_epoch_id_modification_sc_fence();
 
                 // wait for all threads to update their last seen epoch id to the reset value.
-                //
-                // note that parked and not yet started threads are not relevant here, since once they wake up they will see the updated
-                // reset value of the epoch id due to the membarrier, and they will fetch and publish it along with the enabling of the
-                // busy flag as soon as they unpark.
+                // we only need to consider busy threads thanks to the SC fence.
                 wait_for_running_threads_to_see_epoch_id(
                     |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN,
                     false,
@@ -394,6 +414,8 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
 
                 // at this point, all running threads have reset their last seen epoch id, and new threads are guaranteed
                 // to see at least the reset value.
+
+                // TODO: is it guaranteed that we waited a grace period here?
 
                 // now that we finished resetting the epoch id, we can now let new waiters in.
                 drop(reset_sync_write_guard);
@@ -415,46 +437,11 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
 
                 // wait for the leader to finish the reset operation and notify us.
                 event.await;
+
+                // TODO: is it guaranteed that we waited a grace period here?
             }
-
-            // done resetting epoch id
-
-            // re-lock the reset sync guard just in case, even though we shouldn't expect another reset any time soon.
-            // note that the lock should be unlocked now since the writer unlocks it before waking us up.
-            reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.try_read().unwrap_or_else(|_| {
-                panic!("another epoch id reset right after the previous reset")
-            });
-
-            // TODO: explain why another increment is even needed here. especially for the leader case. is it even needed?
-
-            let Ok(new_epoch_id) = epoch_id_inc() else {
-                // avoid poisoning the lock
-                drop(reset_sync_read_guard);
-
-                // we should never get another overflow right after we finish resetting.
-                // the epoch id should take some time to grow before it wraps around again.
-                panic!("overflow when incrementing epoch id after reset")
-            };
-
-            // TODO: do we need another SC fence here?
-
-            new_epoch_id
         }
     };
-
-    // note that parked and not-yet-started threads are irrelevant here since they are guaranteed to see the new pointer
-    // due to the membarrier.
-    // TODO: update docs above, no longer membarrier
-    wait_for_running_threads_to_see_epoch_id(
-        |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
-        include_calling_thread,
-    )
-    .await;
-
-    // ensure that the reset sync read guard is held up until this point.
-    // this is important to make sure that a reset operation is not initiated while we are still waiting for threads to see our new
-    // epoch id, otherwise we would keep waiting until the next overflow of the epoch id.
-    drop(reset_sync_read_guard);
 }
 
 /// wait for all other threads in the process other than the current thread to see some epoch id as implemented in the given predicate
