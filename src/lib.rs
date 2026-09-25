@@ -406,14 +406,38 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
 
                 // wait for all threads to update their last seen epoch id to the reset value.
                 // we only need to consider busy threads thanks to the SC fence.
+                //
+                // as for the busy threads, you may think that us seeing that their last seen epoch id is MIN is not enough, since that MIN may be
+                // some stale value they have from a previous reset operation. but, this actually can't happen due to the increment that we perform
+                // right after this wait, where we increment to MIN+2 and once again wait for everyone to update to MIN+2.
+                //
+                // this guarantees that after that increment, every thread will either see MIN+2 or be sleeping but guaranteed to see MIN+2 when he
+                // wakes up.
                 wait_for_running_threads_to_see_epoch_id(
                     |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN,
                     false,
                 )
                 .await;
 
-                // at this point, all running threads have reset their last seen epoch id, and new threads are guaranteed
-                // to see at least the reset value.
+                // increment the epoch id once, to move it away from the reset value.
+                // this prevents threads from holding a stale reset value in their state, which may then confuse future reset operations by making
+                // them think that a thread saw their reset even though he has the reset value from a previous reset operation.
+                epoch_id_set(
+                    EPOCH_ID_MIN + 2,
+                    // we want release ordering since this basically represent the epoch id increment, but simpler, since we know what the current
+                    // value of the epoch id is. see comment in `epoch_id_inc` explaining why release is needed for this operation.
+                    atomic::Ordering::Release,
+                );
+
+                post_epoch_id_modification_sc_fence();
+
+                // wait for all threads to see the epoch id increment, and to move away from the reset value.
+                // we only need to consider busy threads thanks to the SC fence.
+                wait_for_running_threads_to_see_epoch_id(
+                    |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN + 2,
+                    false,
+                )
+                .await;
 
                 // TODO: is it guaranteed that we waited a grace period here?
 
