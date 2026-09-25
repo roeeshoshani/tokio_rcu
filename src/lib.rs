@@ -646,10 +646,6 @@ fn on_thread_unpark() {
         // this is needed since we actually fetch a new epoch id here, not only set the busy flag.
         atomic::Ordering::Release,
     );
-
-    // TODO: is this still needed with the new code, and with the SC fence added above?
-    // TODO: explain
-    atomic::fence(atomic::Ordering::SeqCst);
 }
 
 fn on_before_task_poll() {
