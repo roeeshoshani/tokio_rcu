@@ -273,8 +273,6 @@ use crate::{
 
 mod atomic_type;
 mod epoch;
-// TODO: remove this module once i am done removing all membarrier calls
-mod membarrier;
 mod notify;
 mod per_thread_storage;
 pub mod rcu_box;
@@ -765,9 +763,6 @@ pub trait TokioRuntimeBuilderExt {
 
 impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
     unsafe fn enable_rcu(&mut self) -> &mut Self {
-        assert!(membarrier::is_supported());
-        membarrier::register();
-
         self.on_before_task_poll(|_| {
             on_before_task_poll();
         })
