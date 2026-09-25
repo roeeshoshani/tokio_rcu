@@ -603,27 +603,39 @@ fn on_thread_unpark() {
 
     let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
 
+    // tell the waiters that we are now back to being busy, and that we are in the process of fetching a new seen epoch id.
+    //
+    // you may think that we could instead first read the epoch id and then store the busy bit and the new epoch id together in a single
+    // write, but this write is specifically used in combination with the SC fence below to guarantee proper happens-before relationships
+    // in some scenarios. see docs on the fence below for more info.
     storage_slot.state.store(
         ThreadState {
             last_seen_epoch_id: 0,
             is_busy: true,
         }
         .encode(),
-        // TODO: ordering
+        // no ordering is needed here, this is only used to mark to the waiters that we are busy and that they should wait for us to
+        // fetch a new epoch id. the real synchronization with the waiters is when we finally publish the new seen epoch id.
+        //
+        // but, we still use release ordering just to keep the release-sequence going. previous writes to the state performed by us used release
+        // ordering to synchronize with readers, and we don't want to ruin their synchronization.
         atomic::Ordering::Release,
     );
 
-    // TODO: explain this
+    // this fence, combined with the state store above, is used to protect from the following scenario:
+    // a writer swaps a pointer X to Y, increments epoch id from E to E+1. checks all threads, sees some reader thread as sleeping.
+    // the reader thread then wakes up, sees the old epoch id E, sees the old pointer X, and uses the old pointer after it was freed.
+    //
+    // more generically speaking, this fence, combined with the state store above, is used to provide the following guarantee to anyone who
+    // modified the global epoch id and then also performs an SC fence: either he sees this thread as busy, or this thread is guaranteed to
+    // see his epoch id modification and all writes previously performed by him.
+    //
+    // this is used to solve the previously mentioned problem by guaranteeing that it will never happen, and it is also used in the reset path
+    // by the leader, to guarantee that we see his reset epoch id.
     atomic::fence(atomic::Ordering::SeqCst);
 
-    // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
-    //
-    // this is needed for the case where a reset operation was performed since we last went to sleep.
-    // in that case, if we wake up and set the busy flag without updating the epoch id, some thread that had already incremented
-    // the epoch id since the reset may think that we saw his epoch id increment since we have a stale high epoch id value, even
-    // though in practice we didn't really see his epoch id increment.
+    // fetch a new epoch id and publish it
     let new_seen_epoch_id = this_thread_see_new_epoch_id();
-
     storage_slot.state.store(
         ThreadState {
             last_seen_epoch_id: new_seen_epoch_id,
@@ -647,24 +659,27 @@ fn on_before_task_poll() {
         return;
     }
 
+    // the sequence of operations here is exactly the same as `on_thread_unpark`, except that we allocate a slot instead of re-using an
+    // existing one.
+    //
+    // for more info on why this specific sequence of operations is used, see `on_thread_unpark`.
     let slot_id = this_thread_alloc_storage_slot(ThreadState {
         last_seen_epoch_id: 0,
         is_busy: true,
     });
 
-    // TODO: explain
     atomic::fence(atomic::Ordering::SeqCst);
 
     let epoch_id = this_thread_see_new_epoch_id();
-
     thread_storage_slot_get_all()[slot_id].state.store(
         ThreadState {
             last_seen_epoch_id: epoch_id,
             is_busy: true,
         }
         .encode(),
-        // TODO: ordering
-        atomic::Ordering::Relaxed,
+        // no ordering is needed here, but we use release to keep the release-sequence going. previous users of this slot performed release
+        // writes to synchronize with readers, and we don't want to ruin their synchronization.
+        atomic::Ordering::Release,
     );
 }
 
