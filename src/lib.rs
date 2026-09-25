@@ -666,10 +666,6 @@ fn on_before_task_poll() {
         // TODO: ordering
         atomic::Ordering::Relaxed,
     );
-
-    // TODO: is this still needed with the new code, and with the SC fence added above?
-    // TODO: explain
-    atomic::fence(atomic::Ordering::SeqCst);
 }
 
 fn on_after_task_poll() {
