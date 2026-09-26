@@ -15,7 +15,7 @@ use crate::loom_or_std::{
 /// similar in functionality to [`tokio::sync::Notify`], but a simplified version of it more tailored to the specific use in this crate.
 pub struct Notify {
     num_wakeups: AtomicUsize,
-    lock: std::sync::Mutex<()>,
+    lock: crate::loom_or_std::sync::Mutex<()>,
     waiters_list_head: UnsafeCell<Next>,
 }
 impl Notify {
@@ -24,7 +24,7 @@ impl Notify {
         pub const fn new() -> Self {
             Self {
                 num_wakeups: AtomicUsize::new(0),
-                lock: std::sync::Mutex::new(()),
+                lock: crate::loom_or_std::sync::Mutex::new(()),
                 waiters_list_head: UnsafeCell::new(None),
             }
         }
