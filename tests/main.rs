@@ -14,20 +14,10 @@ use tokio_rcu::{
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
 #[test]
+#[cfg(not(miri))]
 fn stress_no_uaf() {
-    // for MIRI, use smaller constants to make this test finish within reasonable time limits.
-    cfg_select! {
-        miri => {
-            const READER_NUM_CLONES: usize = 10;
-            // we need this to be big enough to trigger overflow in `cfg(small_epoch_id)`.
-            const WRITER_NUM_WRITES: usize = 2000;
-        },
-        _ => {
-            const READER_NUM_CLONES: usize = 200;
-            const WRITER_NUM_WRITES: usize = 4000;
-        }
-    }
-
+    const READER_NUM_CLONES: usize = 200;
+    const WRITER_NUM_WRITES: usize = 4000;
     const NUM_READER_TASKS: usize = 32;
     const NUM_WRITER_TASKS: usize = 32;
 
@@ -112,20 +102,10 @@ fn stress_no_uaf() {
 /// this is specifically important for checking the race where a waiter sees some worker thread as sleeping, but the worker
 /// thread wakes up immediately and starts using the pointer.
 #[test]
+#[cfg(not(miri))]
 fn stress_no_uaf_with_sleeps() {
-    // for MIRI, use smaller constants to make this test finish within reasonable time limits.
-    cfg_select! {
-        miri => {
-            const READER_NUM_CLONES: usize = 10;
-            // we need this to be big enough to trigger overflow in `cfg(small_epoch_id)`.
-            const WRITER_NUM_WRITES: usize = 2000;
-        },
-        _ => {
-            const READER_NUM_CLONES: usize = 200;
-            const WRITER_NUM_WRITES: usize = 4000;
-        }
-    }
-
+    const READER_NUM_CLONES: usize = 200;
+    const WRITER_NUM_WRITES: usize = 4000;
     const NUM_READER_TASKS: usize = 4;
     const NUM_WRITER_TASKS: usize = 4;
     const SHORT_SLEEP_DURATION: Duration = Duration::from_millis(10);
@@ -226,6 +206,7 @@ fn stress_no_uaf_with_sleeps() {
 // make sure that calling `enable_rcu` multiple times works fine.
 // this shouldn't be done, but should behave nicely just in case.
 #[test]
+#[cfg(not(miri))]
 fn enable_rcu_multiple_calls() {
     let rt = unsafe {
         // SAFETY: we use `rcu_block_on`
@@ -267,6 +248,7 @@ fn enable_rcu_multiple_calls() {
 // make sure that creating multiple runtimes which use `enable_rcu` still works fine.
 // this shouldn't be done, but should behave nicely just in case.
 #[test]
+#[cfg(not(miri))]
 fn enable_rcu_multiple_runtimes() {
     let rt1 = unsafe {
         // SAFETY: we use `rcu_block_on`
@@ -316,20 +298,10 @@ fn enable_rcu_multiple_runtimes() {
 }
 
 #[test]
+#[cfg(not(miri))]
 fn stress_double_buffering() {
-    // for MIRI, use smaller constants to make this test finish within reasonable time limits.
-    cfg_select! {
-        miri => {
-            const READER_NUM_CLONES: usize = 10;
-            // we need this to be big enough to trigger overflow in `cfg(small_epoch_id)`.
-            const WRITER_NUM_WRITES: usize = 2000;
-        },
-        _ => {
-            const READER_NUM_CLONES: usize = 200;
-            const WRITER_NUM_WRITES: usize = 4000;
-        }
-    }
-
+    const READER_NUM_CLONES: usize = 200;
+    const WRITER_NUM_WRITES: usize = 4000;
     const NUM_READER_TASKS: usize = 32;
 
     rcu_block_on(async {
