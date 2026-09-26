@@ -554,8 +554,8 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
 }
 
 /// "see" a new epoch id in the current thread.
-/// this fetches the current epoch id with a proper memory ordering - a release memory ordering, which provides the required
-/// guaranteed, for example it guarantees that once we see an updated epoch id, we see the swap of the rcu protected pointer
+/// this fetches the current epoch id with a proper memory ordering - an acquire memory ordering, which provides the required
+/// guarantees. for example it guarantees that once we see an updated epoch id, we see the swap of the rcu protected pointer
 /// as happened before that store to the epoch id.
 fn this_thread_see_new_epoch_id() -> EpochId {
     epoch_id_get(
