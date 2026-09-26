@@ -439,7 +439,13 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
                 )
                 .await;
 
-                // TODO: is it guaranteed that we waited a grace period here?
+                // note that at this point, we have basically waited (at least) a grace period, since we incremented the epoch id and waited
+                // for everyone to see it.
+                //
+                // furthermore, note that the grace period also applies to all non-leader waiters that are in reset mode with us, since when
+                // we locked the reset lock for writing, we were guaranteed that we see all of their previous memory writes, and we performed
+                // the grace period after locking that lock.
+                // so, we can just notify them that the grace period is over, and they don't to do any more work.
 
                 // now that we finished resetting the epoch id, we can now let new waiters in.
                 drop(reset_sync_write_guard);
@@ -462,7 +468,7 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
                 // wait for the leader to finish the reset operation and notify us.
                 event.await;
 
-                // TODO: is it guaranteed that we waited a grace period here?
+                // the waiter performed the grace period for us, so we are done.
             }
         }
     };
