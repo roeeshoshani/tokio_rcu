@@ -396,7 +396,7 @@ mod tests {
     use std::sync::atomic;
 
     use crate::{
-        epoch::EPOCH_ID_MIN,
+        epoch::{EPOCH_ID_MIN, EpochId},
         per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlots},
         thread_state::ThreadState,
     };
@@ -422,7 +422,7 @@ mod tests {
         const NUM_ALLOCS: u8 = 100;
         fn thread_state_by_alloc_index(alloc_index: u8) -> ThreadState {
             ThreadState {
-                last_seen_epoch_id: ((alloc_index + 1) * 2).into(),
+                last_seen_epoch_id: EpochId::from((alloc_index + 1) * 2),
                 is_busy: true,
             }
         }
