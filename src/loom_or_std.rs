@@ -35,17 +35,6 @@ pub struct CellDataNonNullPtr<T> {
     raw: loom::cell::MutPtr<T>,
 }
 impl<T> CellDataNonNullPtr<T> {
-    pub fn into_ptr(self) -> CellDataMutPtr<T> {
-        #[cfg(not(loom))]
-        unsafe {
-            CellDataMutPtr { raw: self.get() }
-        }
-        #[cfg(loom)]
-        {
-            CellDataMutPtr { raw: self.raw }
-        }
-    }
-
     pub unsafe fn write(&self, value: T) {
         #[cfg(not(loom))]
         unsafe {
