@@ -337,7 +337,7 @@ fn post_epoch_id_modification_sc_fence() {
 /// code inside tokio's task scheduling logic.
 ///
 /// if `include_calling_thread` is set, this function also waits for the calling thread itself to pass through quiescent state after the
-/// membarrier operation. this is usually not needed and should be set to `false`.
+/// membarrier operation. if unsure, set this to `true`.
 /// this flag exists as a workaround to remove overhead from the fast-path of the rcu to the slow path.
 /// specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
 /// holding a read guard to it on the same thread, for example by manually polling the swap future.
