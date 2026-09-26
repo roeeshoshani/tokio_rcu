@@ -14,12 +14,21 @@ use tokio_rcu::{
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
 #[test]
-#[cfg(not(miri))]
 fn stress_no_uaf() {
-    const READER_NUM_CLONES: usize = 200;
-    const WRITER_NUM_WRITES: usize = 4000;
-    const NUM_READER_TASKS: usize = 32;
-    const NUM_WRITER_TASKS: usize = 32;
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 8;
+            const WRITER_NUM_WRITES: usize = 8;
+            const NUM_READER_TASKS: usize = 2;
+            const NUM_WRITER_TASKS: usize = 2;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
+            const NUM_READER_TASKS: usize = 32;
+            const NUM_WRITER_TASKS: usize = 32;
+        }
+    }
 
     rcu_block_on(async {
         let initial_string = "<VALID> initial string";
@@ -102,12 +111,21 @@ fn stress_no_uaf() {
 /// this is specifically important for checking the race where a waiter sees some worker thread as sleeping, but the worker
 /// thread wakes up immediately and starts using the pointer.
 #[test]
-#[cfg(not(miri))]
 fn stress_no_uaf_with_sleeps() {
-    const READER_NUM_CLONES: usize = 200;
-    const WRITER_NUM_WRITES: usize = 4000;
-    const NUM_READER_TASKS: usize = 4;
-    const NUM_WRITER_TASKS: usize = 4;
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 8;
+            const WRITER_NUM_WRITES: usize = 8;
+            const NUM_READER_TASKS: usize = 2;
+            const NUM_WRITER_TASKS: usize = 2;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
+            const NUM_READER_TASKS: usize = 4;
+            const NUM_WRITER_TASKS: usize = 4;
+        }
+    }
     const SHORT_SLEEP_DURATION: Duration = Duration::from_millis(10);
 
     let rt = unsafe {
@@ -300,9 +318,18 @@ fn enable_rcu_multiple_runtimes() {
 #[test]
 #[cfg(not(miri))]
 fn stress_double_buffering() {
-    const READER_NUM_CLONES: usize = 200;
-    const WRITER_NUM_WRITES: usize = 4000;
-    const NUM_READER_TASKS: usize = 32;
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 8;
+            const WRITER_NUM_WRITES: usize = 8;
+            const NUM_READER_TASKS: usize = 2;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
+            const NUM_READER_TASKS: usize = 32;
+        }
+    }
 
     rcu_block_on(async {
         #[derive(Debug, Clone, PartialEq, Eq)]
