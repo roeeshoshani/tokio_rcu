@@ -4,14 +4,25 @@ pub use loom::*;
 #[cfg(not(loom))]
 pub use std::*;
 
+/// a loom/std abstraction over [`UnsafeCell`], providing a unified API specifically tied to the use of [`UnsafeCell`] in this crate.
+///
+/// [`UnsafeCell`]: std::cell::UnsafeCell
 pub struct UnsafeCell<T>(cell::UnsafeCell<T>);
 impl<T> UnsafeCell<T> {
     fn_const_if_not_loom! {
+        /// creates a new unsafe cell containing the given value.
         pub const fn new(value: T) -> Self {
             Self(cell::UnsafeCell::new(value))
         }
     }
 
+    /// returns a mutable pointer to the wrapped value.
+    ///
+    /// # Safety
+    ///
+    /// same safety requirements as [`UnsafeCell`].
+    ///
+    /// [`UnsafeCell`]: std::cell::UnsafeCell
     pub unsafe fn get(&self) -> CellDataMutPtr<T> {
         #[cfg(not(loom))]
         {
@@ -27,7 +38,13 @@ impl<T> UnsafeCell<T> {
     }
 }
 
-/// a loom/std abstraction over a non-null pointer to the data contained inside a cell.
+/// a loom/std abstraction over a non-null pointer ([`NonNull<T>`](std::ptr::NonNull)) to the data contained inside a cell.
+///
+/// for the std case, this actually stores a [`NonNull`](std::ptr::NonNull) to provide niche optimizations.
+///
+/// for the loom case, there's no need to optimize anything, so this has the same layout as a regular cell data pointer.
+///
+/// so, this is only used as an optimization for the std case.
 pub struct CellDataNonNullPtr<T> {
     #[cfg(not(loom))]
     raw: std::ptr::NonNull<T>,
@@ -35,6 +52,11 @@ pub struct CellDataNonNullPtr<T> {
     raw: loom::cell::MutPtr<T>,
 }
 impl<T> CellDataNonNullPtr<T> {
+    /// writes the given value to the pointer.
+    ///
+    /// # Safety
+    ///
+    /// same safety requirements as [`std::ptr::write`].
     pub unsafe fn write(&self, value: T) {
         #[cfg(not(loom))]
         unsafe {
@@ -47,7 +69,7 @@ impl<T> CellDataNonNullPtr<T> {
     }
 }
 
-/// a loom/std abstraction over a mutable pointer to the data contained inside a cell.
+/// a loom/std abstraction over a mutable pointer (`*mut T`) to the data contained inside a cell.
 pub struct CellDataMutPtr<T> {
     #[cfg(not(loom))]
     raw: *mut T,
@@ -72,6 +94,8 @@ impl<T> CellDataMutPtr<T> {
     /// # Safety
     ///
     /// pointer must be valid and must be allowed to be converted to a mut ref according to the regular aliasing rules.
+    ///
+    /// this basically has the same safety requirements as doing `&mut *ptr` on this pointer, if it were a regular pointer.
     pub unsafe fn to_mut_ref(&self) -> &mut T {
         #[cfg(not(loom))]
         unsafe {
@@ -83,6 +107,11 @@ impl<T> CellDataMutPtr<T> {
         }
     }
 
+    /// writes the given value to the pointer.
+    ///
+    /// # Safety
+    ///
+    /// same safety requirements as [`std::ptr::write`].
     pub unsafe fn write(&self, value: T) {
         #[cfg(not(loom))]
         unsafe {
@@ -94,6 +123,11 @@ impl<T> CellDataMutPtr<T> {
         }
     }
 
+    /// replaces the value at `self` with `src`, returning the old value, without dropping either.
+    ///
+    /// # Safety
+    ///
+    /// same safety requirements as [`std::ptr::replace`].
     pub unsafe fn replace(&self, value: T) -> T {
         #[cfg(not(loom))]
         unsafe {
@@ -106,14 +140,21 @@ impl<T> CellDataMutPtr<T> {
     }
 }
 impl<T: Copy> CellDataMutPtr<T> {
+    /// reads the data pointed at by this pointer and copies its contents.
+    ///
+    /// # Safety
+    ///
+    /// pointer must be valid for reading.
+    ///
+    /// this basically has the same safety requirements as doing `*ptr` on this pointer, if it were a regular pointer.
     pub unsafe fn read(&self) -> T {
         #[cfg(not(loom))]
         unsafe {
-            self.raw.read()
+            *self.raw
         }
         #[cfg(loom)]
         unsafe {
-            self.raw.with(|ptr| ptr.read())
+            self.raw.with(|ptr| *ptr)
         }
     }
 }
