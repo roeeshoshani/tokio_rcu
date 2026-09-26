@@ -18,8 +18,9 @@ fn no_uaf_during_stress() {
     // for MIRI, use smaller constants to make this test finish within reasonable time limits.
     cfg_select! {
         miri => {
-            const READER_NUM_CLONES: usize = 20;
-            const WRITER_NUM_WRITES: usize = 100;
+            const READER_NUM_CLONES: usize = 10;
+            // we need this to be big enough to trigger overflow in `cfg(small_epoch_id)`.
+            const WRITER_NUM_WRITES: usize = 2000;
         },
         _ => {
             const READER_NUM_CLONES: usize = 1000;
@@ -115,12 +116,13 @@ fn no_uaf_with_sleeps() {
     // for MIRI, use smaller constants to make this test finish within reasonable time limits.
     cfg_select! {
         miri => {
-            const READER_NUM_CLONES: usize = 50;
-            const WRITER_NUM_WRITES: usize = 50;
+            const READER_NUM_CLONES: usize = 10;
+            // we need this to be big enough to trigger overflow in `cfg(small_epoch_id)`.
+            const WRITER_NUM_WRITES: usize = 2000;
         },
         _ => {
             const READER_NUM_CLONES: usize = 1000;
-            const WRITER_NUM_WRITES: usize = 1000;
+            const WRITER_NUM_WRITES: usize = 10_000;
         }
     }
 
@@ -318,12 +320,13 @@ fn double_buffering() {
     // for MIRI, use smaller constants to make this test finish within reasonable time limits.
     cfg_select! {
         miri => {
-            const READER_NUM_CLONES: usize = 50;
-            const WRITER_NUM_WRITES: usize = 50;
+            const READER_NUM_CLONES: usize = 10;
+            // we need this to be big enough to trigger overflow in `cfg(small_epoch_id)`.
+            const WRITER_NUM_WRITES: usize = 2000;
         },
         _ => {
             const READER_NUM_CLONES: usize = 1000;
-            const WRITER_NUM_WRITES: usize = 1000;
+            const WRITER_NUM_WRITES: usize = 10_000;
         }
     }
 
