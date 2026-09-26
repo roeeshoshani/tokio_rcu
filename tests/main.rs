@@ -15,10 +15,20 @@ use tokio_rcu::{
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
 #[test]
 fn no_uaf_during_stress() {
+    // for MIRI, use smaller constants to make this test finish within reasonable time limits.
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 20;
+            const WRITER_NUM_WRITES: usize = 100;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 1000;
+            const WRITER_NUM_WRITES: usize = 10_000;
+        }
+    }
+
     const NUM_READER_TASKS: usize = 64;
     const NUM_WRITER_TASKS: usize = 64;
-    const READER_NUM_CLONES: usize = 1000;
-    const WRITER_NUM_WRITES: usize = 10_000;
 
     rcu_block_on(async {
         let initial_string = "<VALID> initial string";
@@ -102,10 +112,20 @@ fn no_uaf_during_stress() {
 /// thread wakes up immediately and starts using the pointer.
 #[test]
 fn no_uaf_with_sleeps() {
+    // for MIRI, use smaller constants to make this test finish within reasonable time limits.
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 50;
+            const WRITER_NUM_WRITES: usize = 50;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 1000;
+            const WRITER_NUM_WRITES: usize = 1000;
+        }
+    }
+
     const NUM_READER_TASKS: usize = 4;
     const NUM_WRITER_TASKS: usize = 4;
-    const READER_NUM_CLONES: usize = 1000;
-    const WRITER_NUM_WRITES: usize = 1000;
     const SHORT_SLEEP_DURATION: Duration = Duration::from_millis(10);
 
     let rt = unsafe {
@@ -295,9 +315,19 @@ fn enable_rcu_multiple_runtimes() {
 
 #[test]
 fn double_buffering() {
+    // for MIRI, use smaller constants to make this test finish within reasonable time limits.
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 50;
+            const WRITER_NUM_WRITES: usize = 50;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 1000;
+            const WRITER_NUM_WRITES: usize = 1000;
+        }
+    }
+
     const NUM_READER_TASKS: usize = 64;
-    const READER_NUM_CLONES: usize = 1000;
-    const WRITER_NUM_WRITES: usize = 1000;
 
     rcu_block_on(async {
         #[derive(Debug, Clone, PartialEq, Eq)]
