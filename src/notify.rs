@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::loom_or_std::{
-    UnsafeCell, fn_const_if_not_loom,
+    CellDataMutPtr, CellDataNonNullPtr, UnsafeCell, fn_const_if_not_loom,
     sync::atomic::{self, AtomicUsize},
 };
 
@@ -69,38 +69,41 @@ impl Notify {
         let _guard = self.lock.lock().unwrap();
 
         // SAFETY: in the following code, we assume exclusivity over all data in the list due to the lock.
-        // also, we deliberately avoid creating any references to data inside the slots in the list, since when the futures containing
-        // these slots are polled, mutable references to them are created, and to avoid aliasing problems, we must avoid creating any
-        // reference to any slot related data.
+        //
+        // furthermore, note that we are creating referencing to `Slot`s inside the list which may alias concurrently existing `&mut Slot`
+        // referecnes that exist for those slots due to them being contained in `Notified`, and when `Notified` is polled, a `&mut Notified`
+        // is created.
+        //
+        // this may seem like a violation of rust's aliasing rules, but since `Slot` is `!Unpin`, we are allowd to create aliasing references
+        // to it.
         unsafe {
             let waiters_list_head_ptr = self.waiters_list_head.get();
             let waiters_list_head = waiters_list_head_ptr.to_mut_ref();
 
             while let Some(cur_head) = *waiters_list_head {
-                let slot = cur_head.as_ptr();
+                let slot = cur_head.as_ref();
 
                 // first remove the current slot from the list.
                 // we do this so that if its wake callback panics, we leave the list in a reasonable state.
 
                 // grab the next slot in the list.
-                let next_ptr_opt = *UnsafeCell::raw_get(&raw const (*slot).next);
+                let next_ptr_opt = slot.next.get().read();
 
                 // make the next slot the new head of the list, removing ourselves from it
                 *waiters_list_head = next_ptr_opt;
                 if let Some(next_ptr) = next_ptr_opt {
-                    let next_slot = next_ptr.as_ptr();
+                    let next_slot = next_ptr.as_ref();
 
                     // set the pprev of the next slot to `None`, indicating to it that it is the first slot in the list.
-                    *UnsafeCell::raw_get(&raw mut (*next_slot).pprev) = None;
+                    next_slot.pprev.get().write(None);
                 }
 
                 // tell the node that he is no longer in the list.
                 // this is important for when the future containing the slot is dropped, so that it knows whether to try to remove
                 // itself from the list or not.
-                *UnsafeCell::raw_get(&raw mut (*slot).is_in_list) = false;
+                slot.is_in_list.get().write(false);
 
-                let waker_storage_ptr = UnsafeCell::raw_get(&raw mut (*slot).waker);
-                let waker_opt = std::ptr::replace(waker_storage_ptr, None);
+                let waker_opt = slot.waker.get().replace(None);
                 if let Some(waker) = waker_opt {
                     // if this panics, nothing REALLY bad happens.
                     // the list is currently in a valid state, and this node is no longer part of it.
@@ -121,7 +124,7 @@ type Next = Option<NonNull<Slot>>;
 
 struct Slot {
     /// a pointer to the "next" field of the previous slot, or `None` if this slot is the head of the list.
-    pprev: UnsafeCell<Option<NonNull<Next>>>,
+    pprev: UnsafeCell<Option<CellDataNonNullPtr<Next>>>,
 
     /// a pointer to the next slot, or `None` if this is the last slot in the list.
     next: UnsafeCell<Next>,
@@ -196,13 +199,14 @@ impl<'a> Future for Notified<'a> {
 
             // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
             unsafe {
-                let is_in_list = *self.slot.is_in_list.get();
+                let is_in_list = self.slot.is_in_list.get().read();
 
                 // insert us into the waker list, or update our waker if we're already in the list
                 match is_in_list {
                     true => {
                         // already in the list, update our waker
-                        let waker = &mut *self.slot.waker.get();
+                        let waker_ptr = self.slot.waker.get();
+                        let waker = waker_ptr.to_mut_ref();
                         match &*waker {
                             // note that even if `will_wake` panics we leave everything in a clean state.
                             Some(existing_waker) if existing_waker.will_wake(cx.waker()) => {
@@ -225,21 +229,24 @@ impl<'a> Future for Notified<'a> {
                             return Poll::Ready(());
                         } else {
                             // first time being polled, register ourselves into the list
-                            *self.slot.waker.get() = Some(cx.waker().clone());
-                            *self.slot.is_in_list.get() = true;
+                            self.slot.waker.get().write(Some(cx.waker().clone()));
+                            self.slot.is_in_list.get().write(true);
 
-                            let head_opt = *self.notify.waiters_list_head.get();
-                            *self.slot.next.get() = head_opt;
-                            *self.slot.pprev.get() = None;
+                            let head_opt = self.notify.waiters_list_head.get().read();
+                            self.slot.next.get().write(head_opt);
+                            self.slot.pprev.get().write(None);
 
                             if let Some(head_nonnull) = head_opt {
-                                let head = head_nonnull.as_ptr();
-                                let head_pprev = UnsafeCell::raw_get(&raw mut (*head).pprev);
-                                *head_pprev = Some(NonNull::new_unchecked(self.slot.next.get()))
+                                let head = head_nonnull.as_ref();
+                                head.pprev
+                                    .get()
+                                    .write(Some(self.slot.next.get().to_non_null_unchecked()));
                             }
 
-                            *self.notify.waiters_list_head.get() =
-                                Some(NonNull::from_ref(&self.slot));
+                            self.notify
+                                .waiters_list_head
+                                .get()
+                                .write(Some(NonNull::from_ref(&self.slot)));
 
                             // mark that we have registered ourselves into the list.
                             // this is later used to detect if we got removed from the list after registration, in which case someone
@@ -286,34 +293,33 @@ impl<'a> Drop for Notified<'a> {
             Ok(_guard) => {
                 // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
                 unsafe {
-                    let is_in_list = *self.slot.is_in_list.get();
+                    let is_in_list = self.slot.is_in_list.get().read();
                     if is_in_list {
                         // remove ourselves from the list
 
-                        // set next's pprev to our pprev
-                        let next_opt = *self.slot.next.get();
-                        if let Some(next_nonnull) = next_opt {
-                            let next = next_nonnull.as_ptr();
-                            let next_pprev = UnsafeCell::raw_get(&raw mut (*next).pprev);
-                            *next_pprev = *self.slot.pprev.get();
-                        }
+                        let pprev_opt = self.slot.pprev.get().replace(None);
+                        let next_opt = self.slot.next.get().read();
 
                         // set prev's next to our next
-                        let pprev_opt = *self.slot.pprev.get();
-                        match pprev_opt {
+                        match &pprev_opt {
                             Some(pprev_nonnull) => {
-                                let pprev = pprev_nonnull.as_ptr();
-                                *pprev = next_opt;
+                                pprev_nonnull.write(next_opt);
                             }
                             None => {
                                 // when we are in the list but pprev is `None`, it means that we are the head of the list
                                 debug_assert_eq!(
-                                    *self.notify.waiters_list_head.get(),
+                                    self.notify.waiters_list_head.get().read(),
                                     Some(NonNull::from_ref(&self.slot))
                                 );
 
-                                *self.notify.waiters_list_head.get() = next_opt;
+                                self.notify.waiters_list_head.get().write(next_opt);
                             }
+                        }
+
+                        // set next's pprev to our pprev
+                        if let Some(next_nonnull) = next_opt {
+                            let next = next_nonnull.as_ref();
+                            next.pprev.get().write(pprev_opt);
                         }
                     }
                 }

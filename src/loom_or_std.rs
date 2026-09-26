@@ -4,12 +4,7 @@ pub use loom::*;
 #[cfg(not(loom))]
 pub use std::*;
 
-pub struct UnsafeCell<T> {
-    #[cfg(not(loom))]
-    inner: cell::UnsafeCell<T>,
-    #[cfg(loom)]
-    inner: cell::UnsafeCell<T>,
-}
+pub struct UnsafeCell<T>(cell::UnsafeCell<T>);
 impl<T> UnsafeCell<T> {
     fn_const_if_not_loom! {
         pub fn new(value: T) -> Self {
@@ -17,7 +12,7 @@ impl<T> UnsafeCell<T> {
         }
     }
 
-    pub fn get(&self) -> CellDataMutPtr<T> {
+    pub unsafe fn get(&self) -> CellDataMutPtr<T> {
         #[cfg(not(loom))]
         {
             CellDataMutPtr { raw: self.0.get() }
@@ -30,16 +25,35 @@ impl<T> UnsafeCell<T> {
             }
         }
     }
+}
 
-    pub fn raw_get(this: *const UnsafeCell<T>) -> *mut T {
+/// a loom/std abstraction over a non-null pointer to the data contained inside a cell.
+pub struct CellDataNonNullPtr<T> {
+    #[cfg(not(loom))]
+    raw: std::ptr::NonNull<T>,
+    #[cfg(loom)]
+    raw: loom::cell::MutPtr<T>,
+}
+impl<T> CellDataNonNullPtr<T> {
+    pub fn into_ptr(self) -> CellDataMutPtr<T> {
         #[cfg(not(loom))]
-        {
-            UnsafeCell::raw_get(this)
+        unsafe {
+            CellDataMutPtr { raw: self.get() }
         }
-
         #[cfg(loom)]
         {
-            UnsafeCell
+            CellDataMutPtr { raw: self.raw }
+        }
+    }
+
+    pub unsafe fn write(&self, value: T) {
+        #[cfg(not(loom))]
+        unsafe {
+            *self.raw = value
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.with(|ptr| *ptr = value)
         }
     }
 }
@@ -52,6 +66,18 @@ pub struct CellDataMutPtr<T> {
     raw: loom::cell::MutPtr<T>,
 }
 impl<T> CellDataMutPtr<T> {
+    pub unsafe fn to_non_null_unchecked(self) -> CellDataNonNullPtr<T> {
+        #[cfg(not(loom))]
+        unsafe {
+            CellDataNonNullPtr {
+                raw: std::ptr::NonNull::new_unchecked(self.raw),
+            }
+        }
+        #[cfg(loom)]
+        {
+            CellDataNonNullPtr { raw: self.raw }
+        }
+    }
     /// converts the pointer to a mutable reference.
     ///
     /// # Safety
@@ -65,6 +91,40 @@ impl<T> CellDataMutPtr<T> {
         #[cfg(loom)]
         unsafe {
             self.raw.deref()
+        }
+    }
+
+    pub unsafe fn write(&self, value: T) {
+        #[cfg(not(loom))]
+        unsafe {
+            *self.raw = value
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.with(|ptr| *ptr = value)
+        }
+    }
+
+    pub unsafe fn replace(&self, value: T) -> T {
+        #[cfg(not(loom))]
+        unsafe {
+            self.raw.replace(value)
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.with(|ptr| ptr.replace(value))
+        }
+    }
+}
+impl<T: Copy> CellDataMutPtr<T> {
+    pub unsafe fn read(&self) -> T {
+        #[cfg(not(loom))]
+        unsafe {
+            self.raw.read()
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.with(|ptr| ptr.read())
         }
     }
 }
