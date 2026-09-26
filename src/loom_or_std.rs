@@ -7,7 +7,7 @@ pub use std::*;
 pub struct UnsafeCell<T>(cell::UnsafeCell<T>);
 impl<T> UnsafeCell<T> {
     fn_const_if_not_loom! {
-        pub fn new(value: T) -> Self {
+        pub const fn new(value: T) -> Self {
             Self(cell::UnsafeCell::new(value))
         }
     }
@@ -129,7 +129,7 @@ impl<T: Copy> CellDataMutPtr<T> {
 macro_rules! fn_const_if_not_loom {
     (
         $(
-            $(#[$attr:meta])* $vis:vis fn $name:ident($($args: tt)*) -> $ret:ty $body:block
+            $(#[$attr:meta])* $vis:vis const fn $name:ident($($args: tt)*) -> $ret:ty $body:block
         )+
     ) => {
         $(

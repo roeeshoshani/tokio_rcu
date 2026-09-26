@@ -21,7 +21,7 @@ pub struct Notify {
 impl Notify {
     fn_const_if_not_loom! {
         /// creates a new notify object.
-        pub fn new() -> Self {
+        pub const fn new() -> Self {
             Self {
                 num_wakeups: AtomicUsize::new(0),
                 lock: std::sync::Mutex::new(()),
