@@ -776,6 +776,7 @@ pub trait TokioRuntimeBuilderExt {
     unsafe fn enable_rcu(&mut self) -> &mut Self;
 }
 
+#[cfg(not(loom))]
 impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
     unsafe fn enable_rcu(&mut self) -> &mut Self {
         self.on_before_task_poll(|_| {
@@ -819,6 +820,7 @@ impl TokioRuntimeExt for tokio::runtime::Runtime {
     }
 }
 
+#[cfg(not(loom))]
 /// runs the provided future inside a new multi-threaded tokio runtime with all features enabled and with rcu support.
 pub fn rcu_block_on<F: Future>(future: F) -> F::Output {
     unsafe {
