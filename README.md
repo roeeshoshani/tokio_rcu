@@ -246,12 +246,7 @@ other hard to catch edge cases.
 
 ## platform support
 
-currently, this crate only works on linux and windows.
-
-the limitation stems from the membarrier operation, which is currently only implemented for linux (using the membarrier syscall),
-and windows (using FlushProcessWriteBuffers).
-
-more platforms can be added in the future if needed, and given that they have a way to emulate the behaviour of membarrier.
+this crate is supported on every platform that is supported by tokio.
 
 ## license
 
