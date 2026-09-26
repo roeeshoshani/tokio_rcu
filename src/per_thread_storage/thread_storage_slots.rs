@@ -422,7 +422,7 @@ mod tests {
         const NUM_ALLOCS: u8 = 100;
         fn thread_state_by_alloc_index(alloc_index: u8) -> ThreadState {
             ThreadState {
-                last_seen_epoch_id: ((alloc_index + 1) * 2).try_into().unwrap(),
+                last_seen_epoch_id: ((alloc_index + 1) * 2).into(),
                 is_busy: true,
             }
         }
