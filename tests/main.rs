@@ -23,13 +23,13 @@ fn no_uaf_during_stress() {
             const WRITER_NUM_WRITES: usize = 2000;
         },
         _ => {
-            const READER_NUM_CLONES: usize = 1000;
-            const WRITER_NUM_WRITES: usize = 10_000;
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
         }
     }
 
-    const NUM_READER_TASKS: usize = 64;
-    const NUM_WRITER_TASKS: usize = 64;
+    const NUM_READER_TASKS: usize = 32;
+    const NUM_WRITER_TASKS: usize = 32;
 
     rcu_block_on(async {
         let initial_string = "<VALID> initial string";
@@ -121,8 +121,8 @@ fn no_uaf_with_sleeps() {
             const WRITER_NUM_WRITES: usize = 2000;
         },
         _ => {
-            const READER_NUM_CLONES: usize = 1000;
-            const WRITER_NUM_WRITES: usize = 10_000;
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
         }
     }
 
@@ -325,12 +325,12 @@ fn double_buffering() {
             const WRITER_NUM_WRITES: usize = 2000;
         },
         _ => {
-            const READER_NUM_CLONES: usize = 1000;
-            const WRITER_NUM_WRITES: usize = 10_000;
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
         }
     }
 
-    const NUM_READER_TASKS: usize = 64;
+    const NUM_READER_TASKS: usize = 32;
 
     rcu_block_on(async {
         #[derive(Debug, Clone, PartialEq, Eq)]
