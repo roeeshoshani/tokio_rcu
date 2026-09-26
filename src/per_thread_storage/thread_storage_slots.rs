@@ -396,7 +396,7 @@ mod tests {
     use std::sync::atomic;
 
     use crate::{
-        epoch::{EPOCH_ID_MIN, EpochId},
+        epoch::EPOCH_ID_MIN,
         per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlots},
         thread_state::ThreadState,
     };
