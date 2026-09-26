@@ -324,31 +324,11 @@ fn post_epoch_id_modification_sc_fence() {
     atomic::fence(atomic::Ordering::SeqCst);
 }
 
-// TODO: update docs once i finish removing all membarrier calls
 /// wait for an RCU grace period.
 ///
-/// this function first performs a membarrier to synchronize all previous writes performed by the current thread with all other
-/// threads in the process.
-///
-/// after performing the membarrier, this function waits for every thread that was active during the membarrier operation to pass
-/// through a quiescent state or to became unactive.
-///
-/// a quiescent state of a thread is defined as a state where the thread is not executing any user-defined task, and is instead executing
-/// code inside tokio's task scheduling logic.
-///
-/// if `include_calling_thread` is set, this function also waits for the calling thread itself to pass through quiescent state after the
-/// membarrier operation. if unsure, set this to `true`.
-/// this flag exists as a workaround to remove overhead from the fast-path of the rcu to the slow path.
-/// specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
-/// holding a read guard to it on the same thread, for example by manually polling the swap future.
-/// making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
-/// synchronize rcu operation will never finish unless the caller actually passes through a quiescent state, at which point he can no
-/// longer be holding any read guards.
-/// a deadlock is not ideal, but this should never happen during proper use of this library anyway, and it prevents the UAF without
-/// adding overhead of checks in the fast path, which is a big win.
-/// also note that setting this flag means that the synchronize rcu operation will always yield at least once, to let the calling thread
-/// pass through a quiescent state, even if all threads immediately pass through a quiescent state after the membarrier.
-pub async fn synchronize_rcu(include_calling_thread: bool) {
+/// once this function returns, it is guaranteed that any rcu-protected piece of data data that was made unreachable (e.g. by swapping it with
+/// another piece of data) before calling this function is now no longer used by any thread other than the calling thread.
+pub async fn synchronize_rcu() {
     // lock the reset sync lock for reading.
     //
     // this ensures that if any reset operation is currently ongoing, we don't interrupt it by incremented the epoch id while it
@@ -374,9 +354,21 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
 
             // wait for all threads to see the new epoch id.
             // we only need to consider busy threads thanks to the SC fence.
+            //
+            // note that we also wait for the current thread here.
+            // this is needed as a workaround to remove overhead from the fast-path of the rcu to the slow path.
+            // specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
+            // holding a read guard to it on the same thread, for example by manually polling the swap future.
+            // making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
+            // wait operation will never finish unless the calling thread actually passes through a quiescent state, at which point he can no longer
+            // be holding any read guards.
+            // a deadlock is not ideal, but this should never happen during proper use of this library anyway, and it prevents the UAF without
+            // adding overhead of checks in the fast path, which is a big win.
+            // also note that setting this flag means that the wait operation will always yield at least once, to let the calling thread pass
+            // through a quiescent state, even if all threads immediately pass through a quiescent state and see the epoch id increment.
             wait_for_running_threads_to_see_epoch_id(
                 |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
-                include_calling_thread,
+                true,
             )
             .await;
 
@@ -433,9 +425,12 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
 
                 // wait for all threads to see the epoch id increment, and to move away from the reset value.
                 // we only need to consider busy threads thanks to the SC fence.
+                //
+                // note that here, like in the non-reset increment path, we also need to wait for the calling thread. see the non-reset
+                // wait for more info on why this is needed.
                 wait_for_running_threads_to_see_epoch_id(
                     |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN + 2,
-                    false,
+                    true,
                 )
                 .await;
 

@@ -401,7 +401,7 @@ fn synchronize_rcu_while_blocking_thread_exists() {
         // test what we actually want.
         thread_started.await;
 
-        synchronize_rcu(true).await;
+        synchronize_rcu().await;
 
         should_stop.store(true, atomic::Ordering::Relaxed);
 
