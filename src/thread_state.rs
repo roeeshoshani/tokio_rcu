@@ -28,7 +28,7 @@ impl ThreadState {
         if encoded == Self::NONE_ENCODED_VALUE {
             None
         } else {
-            let last_seen_epoch_id = (encoded & (!1)) as EpochId;
+            let last_seen_epoch_id = encoded & (!1);
 
             Some(Self {
                 last_seen_epoch_id,

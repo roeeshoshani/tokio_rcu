@@ -17,12 +17,8 @@ pub type EpochId = cfg_select! {
         // this config shrinks the size of the epoch id so that it becomes reasonable to overflow it during the tests, for making sure
         // that the overflow handling logic works fine.
         //
-        // ideally, we want a type that is small enough to overflow during the tests.
-        // but, note that we can't use a u8 since it overflows so fast that we trigger the path where the epoch id overflows twice in a
-        // row, which is assumed to never happen since the epoch id is assumed to have a reasonable size.
-        //
-        // so, u16 is the sweet spot where we can easily overflow it, but is big enough to not overflow twice in a row.
-        u16
+        // we just use the smallest type possible, to make sure that we get as many resets as possible during the tests.
+        u8
     }
     _ => {
         // for the default case, use a u32.

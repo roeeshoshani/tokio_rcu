@@ -419,10 +419,10 @@ mod tests {
 
     #[test]
     fn test_multiple_allocs() {
-        const NUM_ALLOCS: u16 = 1024;
-        fn thread_state_by_alloc_index(alloc_index: u16) -> ThreadState {
+        const NUM_ALLOCS: u8 = u8::MAX;
+        fn thread_state_by_alloc_index(alloc_index: u8) -> ThreadState {
             ThreadState {
-                last_seen_epoch_id: ((alloc_index + 1) * 2) as EpochId,
+                last_seen_epoch_id: ((alloc_index + 1) * 2).try_into().unwrap(),
                 is_busy: true,
             }
         }
