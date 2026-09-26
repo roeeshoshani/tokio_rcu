@@ -1,11 +1,14 @@
 use std::{
-    cell::UnsafeCell,
     marker::PhantomPinned,
     panic::UnwindSafe,
     pin::Pin,
     ptr::NonNull,
-    sync::atomic::{self, AtomicUsize},
     task::{Poll, Waker},
+};
+
+use crate::loom_or_std::{
+    UnsafeCell, fn_const_if_not_loom,
+    sync::atomic::{self, AtomicUsize},
 };
 
 /// a synchronization data structure used to pass notifications between different tasks.
@@ -16,12 +19,14 @@ pub struct Notify {
     waiters_list_head: UnsafeCell<Next>,
 }
 impl Notify {
-    /// creates a new notify object.
-    pub const fn new() -> Self {
-        Self {
-            num_wakeups: AtomicUsize::new(0),
-            lock: std::sync::Mutex::new(()),
-            waiters_list_head: UnsafeCell::new(None),
+    fn_const_if_not_loom! {
+        /// creates a new notify object.
+        pub fn new() -> Self {
+            Self {
+                num_wakeups: AtomicUsize::new(0),
+                lock: std::sync::Mutex::new(()),
+                waiters_list_head: UnsafeCell::new(None),
+            }
         }
     }
 
@@ -68,7 +73,8 @@ impl Notify {
         // these slots are polled, mutable references to them are created, and to avoid aliasing problems, we must avoid creating any
         // reference to any slot related data.
         unsafe {
-            let waiters_list_head = &mut *self.waiters_list_head.get();
+            let waiters_list_head_ptr = self.waiters_list_head.get();
+            let waiters_list_head = waiters_list_head_ptr.to_mut_ref();
 
             while let Some(cur_head) = *waiters_list_head {
                 let slot = cur_head.as_ptr();
@@ -77,7 +83,7 @@ impl Notify {
                 // we do this so that if its wake callback panics, we leave the list in a reasonable state.
 
                 // grab the next slot in the list.
-                let next_ptr_opt = *UnsafeCell::raw_get(&raw mut (*slot).next);
+                let next_ptr_opt = *UnsafeCell::raw_get(&raw const (*slot).next);
 
                 // make the next slot the new head of the list, removing ourselves from it
                 *waiters_list_head = next_ptr_opt;

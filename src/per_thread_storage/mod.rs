@@ -9,6 +9,7 @@ use index_type::IndexType;
 
 use crate::{
     atomic_type::Atomic,
+    loom_or_std::static_or_loom_lazy_static,
     thread_state::{EncodedThreadState, ThreadState},
 };
 
@@ -30,10 +31,12 @@ pub struct ThreadStorageSlotValue {
     pub state: Atomic<EncodedThreadState>,
 }
 
-/// the actual storage slots.
-/// each thread allocates a slot by finding an empty one and acquiring it.
-/// all slots are initially empty.
-static THREAD_STORAGE_SLOTS: ThreadStorageSlots = ThreadStorageSlots::new();
+static_or_loom_lazy_static! {
+    /// the actual storage slots.
+    /// each thread allocates a slot by finding an empty one and acquiring it.
+    /// all slots are initially empty.
+    static THREAD_STORAGE_SLOTS: ThreadStorageSlots = ThreadStorageSlots::new();
+}
 
 /// returns all storage slots for iterating over the state of all existing threads.
 pub fn thread_storage_slot_get_all() -> ThreadStorageSlotsReadGuard<'static> {
@@ -95,9 +98,10 @@ impl Drop for OwnedThreadStorageSlot {
     }
 }
 
-thread_local! {
+crate::loom_or_std::thread_local! {
     /// a thread local variable which represents the storage slot currently owned by the current thread.
-    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = const { OwnedThreadStorageSlot::unallocated() };
+    #[allow(unused_parens)] // the extra parentheses are needed to make loom's `thread_local` macro properly parse the `const { ... }` expr.
+    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = (const { OwnedThreadStorageSlot::unallocated() });
 }
 
 /// returns the storage slot id of the current thread, assuming that a storage slot was already allocated for the current
