@@ -17,12 +17,8 @@ pub type EpochId = cfg_select! {
         // this config shrinks the size of the epoch id so that it becomes reasonable to overflow it during the tests, for making sure
         // that the overflow handling logic works fine.
         //
-        // ideally, we want a type that is small enough to overflow during the tests.
-        // but, note that we can't use a u8 since it overflows so fast that we trigger the path where the epoch id overflows twice in a
-        // row, which is assumed to never happen since the epoch id is assumed to have a reasonable size.
-        //
-        // so, u16 is the sweet spot where we can easily overflow it, but is big enough to not overflow twice in a row.
-        u16
+        // we just use the smallest type possible, to make sure that we get as many resets as possible during the tests.
+        u8
     }
     _ => {
         // for the default case, use a u32.
@@ -54,7 +50,11 @@ pub const EPOCH_ID_MAX: EpochId = EpochId::MAX - 1;
 /// used to synchronize threads that are waiting for a grace period with all other threads, by making all threads constantly load this
 /// value and publish their last seen epoch id.
 /// a waiter can then increment it and wait until all threads see his increment in their last seen epoch id value.
-static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN);
+///
+/// we start with MIN+2 instead of just MIN since MIN is used as a "reset value", used during an epoch id reset operation to track which
+/// threads saw the reset value. we don't want the initial value to look like a reset value, since that could cause a stale epoch id value
+/// sampled at the start of the program to look like a reset value.
+static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN + 2);
 
 /// an error returned when an overflow is detected while trying to increment the epoch id.
 #[derive(Debug)]

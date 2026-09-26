@@ -59,21 +59,29 @@ impl OwnedThreadStorageSlot {
 
     /// allocates a new slot for the current thread, if one is not already allocated.
     /// if a slot is already allocated, this function does nothing.
-    pub fn alloc(&self, initial_thread_state: ThreadState) {
-        if self.id.get().is_some() {
-            return;
+    ///
+    /// returns the id of the new allocated slot, or the id of the existing slot if there is one.
+    pub fn alloc(&self, initial_thread_state: ThreadState) -> ThreadStorageSlotId {
+        if let Some(existing_id) = self.id.get() {
+            return existing_id;
         }
         let id = THREAD_STORAGE_SLOTS.alloc(initial_thread_state);
         self.id.set(Some(id));
+        id
     }
 
     /// deallocates the current slot, if any.
     /// if no slot is currently allocated, this function does nothing.
-    pub fn dealloc(&self) {
-        let Some(id) = self.id.get() else { return };
+    ///
+    /// returns `true` if a slot was allocated, `false` otherwise.
+    pub fn dealloc(&self) -> bool {
+        let Some(id) = self.id.get() else {
+            return false;
+        };
         // SAFETY: this slot was previously allocated from the global storage slots buffer, and was not freed yet.
         unsafe { THREAD_STORAGE_SLOTS.dealloc(id) };
         self.id.set(None);
+        true
     }
 
     /// returns the id of the current slot, if any.
@@ -104,11 +112,13 @@ pub fn this_thread_does_have_allocated_storage_slot() -> bool {
 }
 
 /// allocates a storage slot for the current thread, if one is not already allocated.
-pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) {
+pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) -> ThreadStorageSlotId {
     THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.alloc(initial_thread_state))
 }
 
 /// deallocates the storage slot owned by the current thread, if any.
-pub fn this_thread_dealloc_storage_slot() {
+///
+/// returns `true` if a slot was allocated, `false` otherwise.
+pub fn this_thread_dealloc_storage_slot() -> bool {
     THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.dealloc())
 }

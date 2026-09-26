@@ -86,6 +86,33 @@ jobs:
       - run: cargo all-features nextest run
       - run: cargo all-features test --doc
 
+  tests-miri:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-nextest
+          locked: true
+          version: ${{ env.CARGO_NEXTEST_VERSION }}
+
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-all-features
+          locked: true
+          version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
+
+      - run: cargo +nightly all-features miri nextest run
+      - run: cargo +nightly all-features miri test --doc
+
   fmt:
     runs-on: ubuntu-latest
     steps:

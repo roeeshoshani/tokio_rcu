@@ -242,12 +242,7 @@
 //!
 //! # platform support
 //!
-//! currently, this crate only works on linux and windows.
-//!
-//! the limitation stems from the membarrier operation, which is currently only implemented for linux (using the membarrier syscall),
-//! and windows (using FlushProcessWriteBuffers).
-//!
-//! more platforms can be added in the future if needed, and given that they have a way to emulate the behaviour of membarrier.
+//! this crate is supported on every platform that is supported by tokio.
 //!
 //! # license
 //!
@@ -271,7 +266,6 @@ use crate::{
 
 mod atomic_type;
 mod epoch;
-mod membarrier;
 mod notify;
 mod per_thread_storage;
 pub mod rcu_box;
@@ -316,47 +310,25 @@ static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::
 /// operation is done.
 static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 
+/// this function just performs an SC fence, but it provides special guarantees when performed directly after modifying the global
+/// epoch id.
+///
+/// performing an SC fence after a global epoch id modification, combined with the SC fences in the thread-start and thread-wake
+/// paths (for example, see the SC fence in [`on_thread_unpark`]), provides the guarantee that for every thread other than the calling thread,
+/// if we check this thread's state after this fence, either we see that other thread as busy, or he sees our epoch id modification and any
+/// operation performed before it once his fence is over.
+///
+/// this then allows us to only consider busy threads when later waiting for threads to see our incremented epoch id.
+#[inline(always)]
+fn post_epoch_id_modification_sc_fence() {
+    atomic::fence(atomic::Ordering::SeqCst);
+}
+
 /// wait for an RCU grace period.
 ///
-/// this function first performs a membarrier to synchronize all previous writes performed by the current thread with all other
-/// threads in the process.
-///
-/// after performing the membarrier, this function waits for every thread that was active during the membarrier operation to pass
-/// through a quiescent state or to became unactive.
-///
-/// a quiescent state of a thread is defined as a state where the thread is not executing any user-defined task, and is instead executing
-/// code inside tokio's task scheduling logic.
-///
-/// if `include_calling_thread` is set, this function also waits for the calling thread itself to pass through quiescent state after the
-/// membarrier operation. this is usually not needed and should be set to `false`.
-/// this flag exists as a workaround to remove overhead from the fast-path of the rcu to the slow path.
-/// specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
-/// holding a read guard to it on the same thread, for example by manually polling the swap future.
-/// making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
-/// synchronize rcu operation will never finish unless the caller actually passes through a quiescent state, at which point he can no
-/// longer be holding any read guards.
-/// a deadlock is not ideal, but this should never happen during proper use of this library anyway, and it prevents the UAF without
-/// adding overhead of checks in the fast path, which is a big win.
-/// also note that setting this flag means that the synchronize rcu operation will always yield at least once, to let the calling thread
-/// pass through a quiescent state, even if all threads immediately pass through a quiescent state after the membarrier.
-pub async fn synchronize_rcu(include_calling_thread: bool) {
-    // perform a membarrier to make sure that all other threads see the new rcu pointer.
-    membarrier::perform();
-
-    // after the membarrier, all threads are guaranteed to have seen our new pointer.
-    // we only need to wait for any potential existing users of the old pointer to finish using it.
-    //
-    // note that due to the membarrier, we don't need to worry about just-starting threads or just-unparking threads which
-    // may access the old pointer.
-    //
-    // if during the check below, we see that some thread is currently parked, or we don't see the slot of some just-started
-    // thread, then it means that this thread's update of its own state happens strictly after the membarrier, and the state
-    // update always happens before polling the future, so there's no way for the polled future to see the old pointer.
-    // the relationship is:
-    // pointer swap -> membarrier -> thread's update of his own state -> thread's load of the rcu protected pointer
-    // thus, all such threads are guaranteed to see the new pointer, and we can thus ignore them when waiting for all existing
-    // users.
-
+/// once this function returns, it is guaranteed that any rcu-protected piece of data data that was made unreachable (e.g. by swapping it with
+/// another piece of data) before calling this function is now no longer used by any thread other than the calling thread.
+pub async fn synchronize_rcu() {
     // lock the reset sync lock for reading.
     //
     // this ensures that if any reset operation is currently ongoing, we don't interrupt it by incremented the epoch id while it
@@ -366,7 +338,7 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
     //
     // this also ensures that a reset operation is not initiated while we are still waiting for threads to see our incremented epoch id,
     // since we hold this until we finish waiting.
-    let mut reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
+    let reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
 
     // increment the epoch id.
     //
@@ -376,8 +348,35 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
     //
     // we can then sample their published last seen epoch id to know when they saw our increment, and once they did, we know that they
     // passed through a quiescent state.
-    let new_epoch_id = match epoch_id_inc() {
-        Ok(v) => v,
+    match epoch_id_inc() {
+        Ok(new_epoch_id) => {
+            post_epoch_id_modification_sc_fence();
+
+            // wait for all threads to see the new epoch id.
+            // we only need to consider busy threads thanks to the SC fence.
+            //
+            // note that we also wait for the current thread here.
+            // this is needed as a workaround to remove overhead from the fast-path of the rcu to the slow path.
+            // specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
+            // holding a read guard to it on the same thread, for example by manually polling the swap future.
+            // making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
+            // wait operation will never finish unless the calling thread actually passes through a quiescent state, at which point he can no longer
+            // be holding any read guards.
+            // a deadlock is not ideal, but this should never happen during proper use of this library anyway, and it prevents the UAF without
+            // adding overhead of checks in the fast path, which is a big win.
+            // also note that setting this flag means that the wait operation will always yield at least once, to let the calling thread pass
+            // through a quiescent state, even if all threads immediately pass through a quiescent state and see the epoch id increment.
+            wait_for_running_threads_to_see_epoch_id(
+                |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
+                true,
+            )
+            .await;
+
+            // ensure that the reset sync read guard is held up until this point.
+            // this is important to make sure that a reset operation is not initiated while we are still waiting for threads to see our new
+            // epoch id, otherwise we would keep waiting until the next overflow of the epoch id.
+            drop(reset_sync_read_guard);
+        }
         Err(err) => {
             // epoch id overflow.
 
@@ -395,22 +394,53 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
                 // reset the epoch id
                 epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
 
-                // make sure that all threads see the reset of the epoch id.
-                membarrier::perform();
+                post_epoch_id_modification_sc_fence();
 
                 // wait for all threads to update their last seen epoch id to the reset value.
+                // we only need to consider busy threads thanks to the SC fence.
                 //
-                // note that parked and not yet started threads are not relevant here, since once they wake up they will see the updated
-                // reset value of the epoch id due to the membarrier, and they will fetch and publish it along with the enabling of the
-                // busy flag as soon as they unpark.
+                // as for the busy threads, you may think that us seeing that their last seen epoch id is MIN is not enough, since that MIN may be
+                // some stale value they have from a previous reset operation. but, this actually can't happen due to the increment that we perform
+                // right after this wait, where we increment to MIN+2 and once again wait for everyone to update to MIN+2.
+                //
+                // this guarantees that after that increment, every thread will either see MIN+2 or be sleeping but guaranteed to see MIN+2 when he
+                // wakes up.
                 wait_for_running_threads_to_see_epoch_id(
                     |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN,
                     false,
                 )
                 .await;
 
-                // at this point, all running threads have reset their last seen epoch id, and new threads are guaranteed
-                // to see at least the reset value.
+                // increment the epoch id once, to move it away from the reset value.
+                // this prevents threads from holding a stale reset value in their state, which may then confuse future reset operations by making
+                // them think that a thread saw their reset even though he has the reset value from a previous reset operation.
+                epoch_id_set(
+                    EPOCH_ID_MIN + 2,
+                    // we want release ordering since this basically represent the epoch id increment, but simpler, since we know what the current
+                    // value of the epoch id is. see comment in `epoch_id_inc` explaining why release is needed for this operation.
+                    atomic::Ordering::Release,
+                );
+
+                post_epoch_id_modification_sc_fence();
+
+                // wait for all threads to see the epoch id increment, and to move away from the reset value.
+                // we only need to consider busy threads thanks to the SC fence.
+                //
+                // note that here, like in the non-reset increment path, we also need to wait for the calling thread. see the non-reset
+                // wait for more info on why this is needed.
+                wait_for_running_threads_to_see_epoch_id(
+                    |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN + 2,
+                    true,
+                )
+                .await;
+
+                // note that at this point, we have basically waited (at least) a grace period, since we incremented the epoch id and waited
+                // for everyone to see it.
+                //
+                // furthermore, note that the grace period also applies to all non-leader waiters that are in reset mode with us, since when
+                // we locked the reset lock for writing, we were guaranteed that we see all of their previous memory writes, and we performed
+                // the grace period after locking that lock.
+                // so, we can just notify them that the grace period is over, and they don't to do any more work.
 
                 // now that we finished resetting the epoch id, we can now let new waiters in.
                 drop(reset_sync_write_guard);
@@ -432,41 +462,11 @@ pub async fn synchronize_rcu(include_calling_thread: bool) {
 
                 // wait for the leader to finish the reset operation and notify us.
                 event.await;
+
+                // the waiter performed the grace period for us, so we are done.
             }
-
-            // done resetting epoch id
-
-            // re-lock the reset sync guard just in case, even though we shouldn't expect another reset any time soon.
-            // note that the lock should be unlocked now since the writer unlocks it before waking us up.
-            reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.try_read().unwrap_or_else(|_| {
-                panic!("another epoch id reset right after the previous reset")
-            });
-
-            let Ok(new_epoch_id) = epoch_id_inc() else {
-                // avoid poisoning the lock
-                drop(reset_sync_read_guard);
-
-                // we should never get another overflow right after we finish resetting.
-                // the epoch id should take some time to grow before it wraps around again.
-                panic!("overflow when incrementing epoch id after reset")
-            };
-
-            new_epoch_id
         }
     };
-
-    // note that parked and not-yet-started threads are irrelevant here since they are guaranteed to see the new pointer
-    // due to the membarrier.
-    wait_for_running_threads_to_see_epoch_id(
-        |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
-        include_calling_thread,
-    )
-    .await;
-
-    // ensure that the reset sync read guard is held up until this point.
-    // this is important to make sure that a reset operation is not initiated while we are still waiting for threads to see our new
-    // epoch id, otherwise we would keep waiting until the next overflow of the epoch id.
-    drop(reset_sync_read_guard);
 }
 
 /// wait for all other threads in the process other than the current thread to see some epoch id as implemented in the given predicate
@@ -554,8 +554,8 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
 }
 
 /// "see" a new epoch id in the current thread.
-/// this fetches the current epoch id with a proper memory ordering - a release memory ordering, which provides the required
-/// guaranteed, for example it guarantees that once we see an updated epoch id, we see the swap of the rcu protected pointer
+/// this fetches the current epoch id with a proper memory ordering - an acquire memory ordering, which provides the required
+/// guarantees. for example it guarantees that once we see an updated epoch id, we see the swap of the rcu protected pointer
 /// as happened before that store to the epoch id.
 fn this_thread_see_new_epoch_id() -> EpochId {
     epoch_id_get(
@@ -575,7 +575,12 @@ fn on_thread_stop() {
     // blocking threads will not have a slot at all, since we only allocate a slot in the `on_before_task_poll` hook.
     // tokio worker threads may or may not have a slot, depending on whether they have polled any task throughout their
     // lifetime.
-    this_thread_dealloc_storage_slot();
+    if this_thread_dealloc_storage_slot() {
+        // if we actually had a slot, wake all waiters since some waiters may be waiting for us to see their new epoch id, and we are instead
+        // going to stop running so we will never see it.
+        // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected pointers.
+        THREAD_EPOCH_UPDATED_NOTIFY.notify();
+    }
 }
 
 fn on_thread_park() {
@@ -594,6 +599,10 @@ fn on_thread_park() {
             // no special ordering needed here.
             // note that this relaxed store doesn't break the release-sequence of this variable (see c++ memory model for more
             // info), so it doesn't prevent the loader from synchronizing with any previous release ordered store.
+            //
+            // you may think that we need release, to make sure that when waiters see that we are non-busy, they also see all our previous writes
+            // to rcu-protected pointers as happens before that, but this is already guaranteed by the `on_after_task_poll` hook which writes with
+            // release ordering, and we are keeping its release-sequence going.
             atomic::Ordering::Relaxed,
         );
     }
@@ -613,15 +622,41 @@ fn on_thread_unpark() {
         return;
     }
 
-    // note that in addition to setting the is busy flag here, we also need to see a new epoch id.
-    //
-    // this is needed for the case where a reset operation was performed since we last went to sleep.
-    // in that case, if we wake up and set the busy flag without updating the epoch id, some thread that had already incremented
-    // the epoch id since the reset may think that we saw his epoch id increment since we have a stale high epoch id value, even
-    // though in practice we didn't really see his epoch id increment.
-    let new_seen_epoch_id = this_thread_see_new_epoch_id();
-
     let storage_slot = &thread_storage_slot_get_all()[this_thread_get_storage_slot_id()];
+
+    // tell the waiters that we are now back to being busy, and that we are in the process of fetching a new seen epoch id.
+    //
+    // you may think that we could instead first read the epoch id and then store the busy bit and the new epoch id together in a single
+    // write, but this write is specifically used in combination with the SC fence below to guarantee proper happens-before relationships
+    // in some scenarios. see docs on the fence below for more info.
+    storage_slot.state.store(
+        ThreadState {
+            last_seen_epoch_id: 0,
+            is_busy: true,
+        }
+        .encode(),
+        // no ordering is needed here, this is only used to mark to the waiters that we are busy and that they should wait for us to
+        // fetch a new epoch id. the real synchronization with the waiters is when we finally publish the new seen epoch id.
+        //
+        // but, we still use release ordering just to keep the release-sequence going. previous writes to the state performed by us used release
+        // ordering to synchronize with readers, and we don't want to ruin their synchronization.
+        atomic::Ordering::Release,
+    );
+
+    // this fence, combined with the state store above, is used to protect from the following scenario:
+    // a writer swaps a pointer X to Y, increments epoch id from E to E+1. checks all threads, sees some reader thread as sleeping.
+    // the reader thread then wakes up, sees the old epoch id E, sees the old pointer X, and uses the old pointer after it was freed.
+    //
+    // more generically speaking, this fence, combined with the state store above, is used to provide the following guarantee to anyone who
+    // modified the global epoch id and then also performs an SC fence: either he sees this thread as busy, or this thread is guaranteed to
+    // see his epoch id modification and all writes previously performed by him.
+    //
+    // this is used to solve the previously mentioned problem by guaranteeing that it will never happen, and it is also used in the reset path
+    // by the leader, to guarantee that we see his reset epoch id.
+    atomic::fence(atomic::Ordering::SeqCst);
+
+    // fetch a new epoch id and publish it
+    let new_seen_epoch_id = this_thread_see_new_epoch_id();
     storage_slot.state.store(
         ThreadState {
             last_seen_epoch_id: new_seen_epoch_id,
@@ -645,11 +680,28 @@ fn on_before_task_poll() {
         return;
     }
 
-    let epoch_id = this_thread_see_new_epoch_id();
-    this_thread_alloc_storage_slot(ThreadState {
-        last_seen_epoch_id: epoch_id,
+    // the sequence of operations here is exactly the same as `on_thread_unpark`, except that we allocate a slot instead of re-using an
+    // existing one.
+    //
+    // for more info on why this specific sequence of operations is used, see `on_thread_unpark`.
+    let slot_id = this_thread_alloc_storage_slot(ThreadState {
+        last_seen_epoch_id: 0,
         is_busy: true,
     });
+
+    atomic::fence(atomic::Ordering::SeqCst);
+
+    let epoch_id = this_thread_see_new_epoch_id();
+    thread_storage_slot_get_all()[slot_id].state.store(
+        ThreadState {
+            last_seen_epoch_id: epoch_id,
+            is_busy: true,
+        }
+        .encode(),
+        // no ordering is needed here, but we use release to keep the release-sequence going. previous users of this slot performed release
+        // writes to synchronize with readers, and we don't want to ruin their synchronization.
+        atomic::Ordering::Release,
+    );
 }
 
 fn on_after_task_poll() {
@@ -721,9 +773,6 @@ pub trait TokioRuntimeBuilderExt {
 
 impl TokioRuntimeBuilderExt for tokio::runtime::Builder {
     unsafe fn enable_rcu(&mut self) -> &mut Self {
-        assert!(membarrier::is_supported());
-        membarrier::register();
-
         self.on_before_task_poll(|_| {
             on_before_task_poll();
         })

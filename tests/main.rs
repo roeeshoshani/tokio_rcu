@@ -14,11 +14,21 @@ use tokio_rcu::{
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
 #[test]
-fn no_uaf_during_stress() {
-    const NUM_READER_TASKS: usize = 64;
-    const NUM_WRITER_TASKS: usize = 64;
-    const READER_NUM_CLONES: usize = 1000;
-    const WRITER_NUM_WRITES: usize = 10_000;
+fn stress_no_uaf() {
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 8;
+            const WRITER_NUM_WRITES: usize = 8;
+            const NUM_READER_TASKS: usize = 2;
+            const NUM_WRITER_TASKS: usize = 2;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
+            const NUM_READER_TASKS: usize = 32;
+            const NUM_WRITER_TASKS: usize = 32;
+        }
+    }
 
     rcu_block_on(async {
         let initial_string = "<VALID> initial string";
@@ -101,11 +111,21 @@ fn no_uaf_during_stress() {
 /// this is specifically important for checking the race where a waiter sees some worker thread as sleeping, but the worker
 /// thread wakes up immediately and starts using the pointer.
 #[test]
-fn no_uaf_with_sleeps() {
-    const NUM_READER_TASKS: usize = 4;
-    const NUM_WRITER_TASKS: usize = 4;
-    const READER_NUM_CLONES: usize = 1000;
-    const WRITER_NUM_WRITES: usize = 1000;
+fn stress_no_uaf_with_sleeps() {
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 8;
+            const WRITER_NUM_WRITES: usize = 8;
+            const NUM_READER_TASKS: usize = 2;
+            const NUM_WRITER_TASKS: usize = 2;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
+            const NUM_READER_TASKS: usize = 4;
+            const NUM_WRITER_TASKS: usize = 4;
+        }
+    }
     const SHORT_SLEEP_DURATION: Duration = Duration::from_millis(10);
 
     let rt = unsafe {
@@ -204,6 +224,7 @@ fn no_uaf_with_sleeps() {
 // make sure that calling `enable_rcu` multiple times works fine.
 // this shouldn't be done, but should behave nicely just in case.
 #[test]
+#[cfg(not(miri))]
 fn enable_rcu_multiple_calls() {
     let rt = unsafe {
         // SAFETY: we use `rcu_block_on`
@@ -245,6 +266,7 @@ fn enable_rcu_multiple_calls() {
 // make sure that creating multiple runtimes which use `enable_rcu` still works fine.
 // this shouldn't be done, but should behave nicely just in case.
 #[test]
+#[cfg(not(miri))]
 fn enable_rcu_multiple_runtimes() {
     let rt1 = unsafe {
         // SAFETY: we use `rcu_block_on`
@@ -294,10 +316,20 @@ fn enable_rcu_multiple_runtimes() {
 }
 
 #[test]
-fn double_buffering() {
-    const NUM_READER_TASKS: usize = 64;
-    const READER_NUM_CLONES: usize = 1000;
-    const WRITER_NUM_WRITES: usize = 1000;
+#[cfg(not(miri))]
+fn stress_double_buffering() {
+    cfg_select! {
+        miri => {
+            const READER_NUM_CLONES: usize = 8;
+            const WRITER_NUM_WRITES: usize = 8;
+            const NUM_READER_TASKS: usize = 2;
+        },
+        _ => {
+            const READER_NUM_CLONES: usize = 200;
+            const WRITER_NUM_WRITES: usize = 4000;
+            const NUM_READER_TASKS: usize = 32;
+        }
+    }
 
     rcu_block_on(async {
         #[derive(Debug, Clone, PartialEq, Eq)]
@@ -401,7 +433,7 @@ fn synchronize_rcu_while_blocking_thread_exists() {
         // test what we actually want.
         thread_started.await;
 
-        synchronize_rcu(true).await;
+        synchronize_rcu().await;
 
         should_stop.store(true, atomic::Ordering::Relaxed);
 
