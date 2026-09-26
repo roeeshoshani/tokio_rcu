@@ -419,7 +419,7 @@ mod tests {
 
     #[test]
     fn test_multiple_allocs() {
-        const NUM_ALLOCS: u8 = u8::MAX;
+        const NUM_ALLOCS: u8 = 100;
         fn thread_state_by_alloc_index(alloc_index: u8) -> ThreadState {
             ThreadState {
                 last_seen_epoch_id: ((alloc_index + 1) * 2).try_into().unwrap(),
