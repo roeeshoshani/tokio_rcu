@@ -72,11 +72,16 @@ impl OwnedThreadStorageSlot {
 
     /// deallocates the current slot, if any.
     /// if no slot is currently allocated, this function does nothing.
-    pub fn dealloc(&self) {
-        let Some(id) = self.id.get() else { return };
+    ///
+    /// returns `true` if a slot was allocated, `false` otherwise.
+    pub fn dealloc(&self) -> bool {
+        let Some(id) = self.id.get() else {
+            return false;
+        };
         // SAFETY: this slot was previously allocated from the global storage slots buffer, and was not freed yet.
         unsafe { THREAD_STORAGE_SLOTS.dealloc(id) };
         self.id.set(None);
+        true
     }
 
     /// returns the id of the current slot, if any.
@@ -112,6 +117,8 @@ pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) -> Thre
 }
 
 /// deallocates the storage slot owned by the current thread, if any.
-pub fn this_thread_dealloc_storage_slot() {
+///
+/// returns `true` if a slot was allocated, `false` otherwise.
+pub fn this_thread_dealloc_storage_slot() -> bool {
     THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.dealloc())
 }

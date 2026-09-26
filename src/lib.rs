@@ -575,12 +575,12 @@ fn on_thread_stop() {
     // blocking threads will not have a slot at all, since we only allocate a slot in the `on_before_task_poll` hook.
     // tokio worker threads may or may not have a slot, depending on whether they have polled any task throughout their
     // lifetime.
-    this_thread_dealloc_storage_slot();
-
-    // wake all waiters since some waiters may be waiting for us to see their new epoch id, and we are instead going to stop running
-    // so we will never see it.
-    // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected pointers.
-    THREAD_EPOCH_UPDATED_NOTIFY.notify();
+    if this_thread_dealloc_storage_slot() {
+        // if we actually had a slot, wake all waiters since some waiters may be waiting for us to see their new epoch id, and we are instead
+        // going to stop running so we will never see it.
+        // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected pointers.
+        THREAD_EPOCH_UPDATED_NOTIFY.notify();
+    }
 }
 
 fn on_thread_park() {
