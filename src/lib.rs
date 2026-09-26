@@ -599,6 +599,10 @@ fn on_thread_park() {
             // no special ordering needed here.
             // note that this relaxed store doesn't break the release-sequence of this variable (see c++ memory model for more
             // info), so it doesn't prevent the loader from synchronizing with any previous release ordered store.
+            //
+            // you may think that we need release, to make sure that when waiters see that we are non-busy, they also see all our previous writes
+            // to rcu-protected pointers as happens before that, but this is already guaranteed by the `on_after_task_poll` hook which writes with
+            // release ordering, and we are keeping its release-sequence going.
             atomic::Ordering::Relaxed,
         );
     }
