@@ -38,7 +38,7 @@ impl<T> CellDataNonNullPtr<T> {
     pub unsafe fn write(&self, value: T) {
         #[cfg(not(loom))]
         unsafe {
-            *self.raw = value
+            *self.raw.as_ptr() = value
         }
         #[cfg(loom)]
         unsafe {

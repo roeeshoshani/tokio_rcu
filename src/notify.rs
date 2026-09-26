@@ -7,7 +7,7 @@ use std::{
 };
 
 use crate::loom_or_std::{
-    CellDataMutPtr, CellDataNonNullPtr, UnsafeCell, fn_const_if_not_loom,
+    CellDataNonNullPtr, UnsafeCell, fn_const_if_not_loom,
     sync::atomic::{self, AtomicUsize},
 };
 
