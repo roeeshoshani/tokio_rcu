@@ -14,7 +14,7 @@ use tokio_rcu::{
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
 #[test]
-fn no_uaf_during_stress() {
+fn stress_no_uaf() {
     // for MIRI, use smaller constants to make this test finish within reasonable time limits.
     cfg_select! {
         miri => {
@@ -112,7 +112,7 @@ fn no_uaf_during_stress() {
 /// this is specifically important for checking the race where a waiter sees some worker thread as sleeping, but the worker
 /// thread wakes up immediately and starts using the pointer.
 #[test]
-fn no_uaf_with_sleeps() {
+fn stress_no_uaf_with_sleeps() {
     // for MIRI, use smaller constants to make this test finish within reasonable time limits.
     cfg_select! {
         miri => {
@@ -316,7 +316,7 @@ fn enable_rcu_multiple_runtimes() {
 }
 
 #[test]
-fn double_buffering() {
+fn stress_double_buffering() {
     // for MIRI, use smaller constants to make this test finish within reasonable time limits.
     cfg_select! {
         miri => {
