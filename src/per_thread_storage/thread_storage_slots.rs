@@ -1,15 +1,14 @@
-use std::{
-    cell::UnsafeCell,
-    ops::Deref,
-    ptr::NonNull,
-    sync::atomic::{self, AtomicUsize},
-};
+use std::{cell::UnsafeCell, ops::Deref, ptr::NonNull};
 
 use branches::likely;
 use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
 
 use crate::{
     atomic_type::Atomic,
+    loom_or_std::{
+        fn_const_if_not_loom,
+        sync::atomic::{self, AtomicUsize},
+    },
     per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlotValue},
     thread_state::{EncodedThreadState, ThreadState},
 };
@@ -28,12 +27,14 @@ struct ThreadStorageSlotsCurData {
     capacity: usize,
 }
 impl ThreadStorageSlotsCurData {
-    /// creates a new empty cur data info representing an empty buffer.
-    const fn new() -> Self {
-        Self {
-            ptr: NonNull::dangling().as_ptr(),
-            len: AtomicUsize::new(0),
-            capacity: 0,
+    fn_const_if_not_loom! {
+        /// creates a new empty cur data info representing an empty buffer.
+        const fn new() -> Self {
+            Self {
+                ptr: NonNull::dangling().as_ptr(),
+                len: AtomicUsize::new(0),
+                capacity: 0,
+            }
         }
     }
 }
@@ -66,20 +67,22 @@ pub struct ThreadStorageSlots {
     cur_data_lock: parking_lot::RwLock<CurDataLockMarker>,
 
     /// a lock which is used to make writers mutually exclusive, such that at any given moment, only one writer can work.
-    write_lock: std::sync::Mutex<WriteLockMarker>,
+    write_lock: crate::loom_or_std::sync::Mutex<WriteLockMarker>,
 
     /// indices of free slots.
     /// protected by the write lock.
     free_slots: UnsafeCell<Vec<ThreadStorageSlotId>>,
 }
 impl ThreadStorageSlots {
-    /// creates a new empty slots buffer.
-    pub const fn new() -> Self {
-        Self {
-            cur_data: UnsafeCell::new(ThreadStorageSlotsCurData::new()),
-            cur_data_lock: parking_lot::RwLock::new(CurDataLockMarker),
-            write_lock: std::sync::Mutex::new(WriteLockMarker),
-            free_slots: UnsafeCell::new(Vec::new()),
+    fn_const_if_not_loom! {
+        /// creates a new empty slots buffer.
+        pub const fn new() -> Self {
+            Self {
+                cur_data: UnsafeCell::new(ThreadStorageSlotsCurData::new()),
+                cur_data_lock: parking_lot::RwLock::new(CurDataLockMarker),
+                write_lock: crate::loom_or_std::sync::Mutex::new(WriteLockMarker),
+                free_slots: UnsafeCell::new(Vec::new()),
+            }
         }
     }
 
@@ -129,7 +132,7 @@ impl ThreadStorageSlots {
     fn modify_cur_data<F, R>(
         &self,
         f: F,
-        _write_guard: &std::sync::MutexGuard<'_, WriteLockMarker>,
+        _write_guard: &crate::loom_or_std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> R
     where
         F: FnOnce(&mut ThreadStorageSlotsCurData) -> R,
@@ -184,7 +187,7 @@ impl ThreadStorageSlots {
         &self,
         encoded_initial_thread_state: EncodedThreadState,
         free_slot_id: ThreadStorageSlotId,
-        _write_guard: &std::sync::MutexGuard<'_, WriteLockMarker>,
+        _write_guard: &crate::loom_or_std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
         // SAFETY: we are holding the write lock, so no one can modify the cur data other than us.
         let cur_data = unsafe { self.cur_data_as_slice() };
@@ -213,7 +216,7 @@ impl ThreadStorageSlots {
     unsafe fn alloc_no_cur_data(
         &self,
         new_slot_value: ThreadStorageSlotValue,
-        write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
+        write_guard: crate::loom_or_std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
         // assuming a multi-threaded tokio runtime, which is what is expected to be used with this crate, we will have at
         // least `num_cpus` worker threads plus 1 main thread, so pre-allocate enough space for that amount.
@@ -239,7 +242,7 @@ impl ThreadStorageSlots {
     fn alloc_no_free_slots(
         &self,
         encoded_initial_thread_state: EncodedThreadState,
-        write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
+        write_guard: crate::loom_or_std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
         // no free slots in the existing storage, allocate a bigger vector.
 
@@ -270,7 +273,7 @@ impl ThreadStorageSlots {
     unsafe fn alloc_no_free_slots_grow_cur_data(
         &self,
         new_slot_value: ThreadStorageSlotValue,
-        write_guard: std::sync::MutexGuard<'_, WriteLockMarker>,
+        write_guard: crate::loom_or_std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
         let cur_data = unsafe { &*self.cur_data.get() };
@@ -393,7 +396,7 @@ impl<'a> Deref for ThreadStorageSlotsReadGuard<'a> {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic;
+    use crate::loom_or_std::sync::atomic;
 
     use crate::{
         epoch::{EPOCH_ID_MIN, EpochId},
