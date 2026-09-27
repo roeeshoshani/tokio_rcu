@@ -75,7 +75,11 @@ unsafe impl GlobalAlloc for UafDetectorSupportingAllocator {
                 if let Some(live_alloc_index) =
                     uaf_detector_allocs.live.iter().position(|x| *x == ptr)
                 {
-                    // move this allocation from the live list to the free list, but don't free it completely just yet.
+                    // mark this allocation as freed, and move it from the live list to the free list, but don't free it completely just yet.
+                    {
+                        let uaf_detector = unsafe { &mut *ptr.cast::<UafDetector>() };
+                        uaf_detector.was_freed = true;
+                    }
                     uaf_detector_allocs.live.swap_remove(live_alloc_index);
                     uaf_detector_allocs.freed.push(ptr);
                     return;
@@ -123,10 +127,5 @@ impl UafDetector {
     pub fn id(&self) -> usize {
         self.try_id()
             .expect("attempted to use a UAF detector object after it was freed")
-    }
-}
-impl Drop for UafDetector {
-    fn drop(&mut self) {
-        self.was_freed = true;
     }
 }
