@@ -91,8 +91,6 @@ impl ThreadStorageSlots {
 
     /// returns a read guard for the current slots buffer. the returned guard dereferences to a slice of all slots.
     ///
-    /// you must not block while holding the guard, and must not hold it for a "long time".
-    ///
     /// this function provides acquire memory ordering in relation to writers that re-allocate the data buffer.
     pub fn read(&self) -> ThreadStorageSlotsReadGuard<'_> {
         ThreadStorageSlotsReadGuard {
@@ -417,7 +415,6 @@ impl Drop for ThreadStorageSlots {
 unsafe impl Sync for ThreadStorageSlots {}
 
 /// a read guard for the thread storage slots. dereferences into a slice of all slots.
-/// you must not block while holding this guard, and must not hold it for a "long time".
 pub struct ThreadStorageSlotsReadGuard<'a> {
     _guard: crate::loom::parking_lot::RwLockReadGuard<'a, CurDataLockMarker>,
     origin: &'a ThreadStorageSlots,
