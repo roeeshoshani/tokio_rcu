@@ -3,7 +3,10 @@ use crate::loom::{
     std::sync::atomic::{self, AtomicU8, AtomicU16, AtomicU32},
 };
 
+/// represents an integer type that has a corresponding atomic type.
 pub trait HasAtomicType {
+    /// the atomic type of this integer type.
+    /// for example, for [`u32`], this is [`AtomicU32`].
     type AtomicType: std::fmt::Debug;
 }
 
@@ -19,6 +22,9 @@ impl_has_atomic_type! {u8, AtomicU8}
 impl_has_atomic_type! {u16, AtomicU16}
 impl_has_atomic_type! {u32, AtomicU32}
 
+/// given some integer type `T`, returns the corresponding atomic type for it.
+/// for example, `Atomic<u32>` is [`AtomicU32`].
+/// this allows writing code in a more generic manner.
 pub type RawAtomic<T> = <T as HasAtomicType>::AtomicType;
 
 /// a generic wrapper around atomic integer types which provides an abstraction over the std and loom interfaces, specifically
@@ -48,14 +54,17 @@ macro_rules! impl_atomic_type {
                 }
             }
 
+            /// see [`AtomicUsize::load`].
             pub fn load(&self, ordering: atomic::Ordering) -> $int_ty {
                 self.inner.load(ordering)
             }
 
+            /// see [`AtomicUsize::store`].
             pub fn store(&self, new_value: $int_ty, ordering: atomic::Ordering){
                 self.inner.store(new_value, ordering)
             }
 
+            /// see [`AtomicUsize::try_update`].
             pub fn try_update(
                 &self,
                 set_order: atomic::Ordering,
@@ -72,14 +81,17 @@ macro_rules! impl_atomic_type {
                 }
             }
 
+            /// see [`AtomicUsize::fetch_and`].
             pub fn fetch_and(&self, val: $int_ty, order: atomic::Ordering) -> $int_ty {
                 self.inner.fetch_and(val, order)
             }
 
+            /// see [`AtomicUsize::fetch_or`].
             pub fn fetch_or(&self, val: $int_ty, order: atomic::Ordering) -> $int_ty {
                 self.inner.fetch_or(val, order)
             }
 
+            /// see [`AtomicUsize::compare_exchange`].
             pub fn compare_exchange(&self,
                 current: $int_ty,
                 new: $int_ty,
