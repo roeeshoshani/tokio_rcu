@@ -113,6 +113,29 @@ jobs:
       - run: cargo +nightly all-features miri nextest run
       - run: cargo +nightly all-features miri test --doc
 
+  tests-loom:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm, windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.os }}
+    env:
+      RUSTFLAGS: --cfg loom
+      LOOM_MAX_PREEMPTIONS: 6
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: miri
+
+      - uses: baptiste0928/cargo-install@v3
+        with:
+          crate: cargo-all-features
+          locked: true
+          version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
+
+      - run: cargo test --test loom --release
+
   fmt:
     runs-on: ubuntu-latest
     steps:
