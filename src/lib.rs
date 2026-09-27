@@ -320,10 +320,10 @@ static_or_loom_lazy_static! {
 ///
 /// performing an SC fence after a global epoch id modification, combined with the SC fences in the thread-start and thread-wake
 /// paths (for example, see the SC fence in [`on_thread_unpark`]), provides the guarantee that for every thread other than the calling thread,
-/// if we check this thread's state after this fence, either we see that other thread as busy, or he sees our epoch id modification and any
-/// operation performed before it once his fence is over.
+/// if we check that thread's state after this fence, either we see that other thread as busy, or that thread sees our epoch id modification and
+/// any operation performed before it once his fence is over.
 ///
-/// this then allows us to only consider busy threads when later waiting for threads to see our incremented epoch id.
+/// this then allows us to only consider busy threads when later waiting for threads to see our modified epoch id.
 #[inline(always)]
 fn post_epoch_id_modification_sc_fence() {
     atomic::fence(atomic::Ordering::SeqCst);
