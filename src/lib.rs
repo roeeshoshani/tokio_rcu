@@ -653,8 +653,8 @@ fn on_thread_unpark() {
     // the reader thread then wakes up, sees the old epoch id E, sees the old pointer X, and uses the old pointer after it was freed.
     //
     // more generically speaking, this fence, combined with the state store above, is used to provide the following guarantee to anyone who
-    // modified the global epoch id and then also performs an SC fence: either he sees this thread as busy, or this thread is guaranteed to
-    // see his epoch id modification and all writes previously performed by him.
+    // modifies the global epoch id and then also performs an SC fence (see `post_epoch_id_modification_sc_fence`): either he sees this thread
+    // as busy, or this thread is guaranteed to see his epoch id modification and all writes previously performed by him.
     //
     // this is used to solve the previously mentioned problem by guaranteeing that it will never happen, and it is also used in the reset path
     // by the leader, to guarantee that we see his reset epoch id.
