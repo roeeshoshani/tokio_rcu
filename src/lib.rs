@@ -332,7 +332,7 @@ fn post_epoch_id_modification_sc_fence() {
 /// wait for an RCU grace period.
 ///
 /// once this function returns, it is guaranteed that any rcu-protected piece of data data that was made unreachable (e.g. by swapping it with
-/// another piece of data) before calling this function is now no longer used by any thread other than the calling thread.
+/// another piece of data) before calling this function is now no longer used by any thread in the process, including the current thread.
 pub async fn synchronize_rcu() {
     // lock the reset sync lock for reading.
     //
