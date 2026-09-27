@@ -3,13 +3,13 @@
 //! usually, for representing thread local state, [`thread_local!`] is used.
 //! but, for the thread state we need the ability to iterate over the thread local state value of all currently registered threads.
 //! this is not possible with [`thread_local!`], so we manually implement that mechanism.
-use std::{cell::Cell, num::NonZeroU16};
+use std::num::NonZeroU16;
 
 use index_type::IndexType;
 
 use crate::{
     atomic_type::Atomic,
-    loom::static_or_loom_lazy_static,
+    loom::{fn_const_if_not_loom, static_or_loom_lazy_static, std::cell::Cell},
     thread_state::{EncodedThreadState, ThreadState},
 };
 
@@ -52,11 +52,13 @@ pub struct OwnedThreadStorageSlot {
     id: Cell<Option<ThreadStorageSlotId>>,
 }
 impl OwnedThreadStorageSlot {
-    /// creates a new unallocated instance not associated with any actual slot.
-    /// to allocate a slot, call the [`allocate`](Self::alloc) function.
-    pub const fn unallocated() -> Self {
-        Self {
-            id: Cell::new(None),
+    fn_const_if_not_loom! {
+        /// creates a new unallocated instance not associated with any actual slot.
+        /// to allocate a slot, call the [`allocate`](Self::alloc) function.
+        pub const fn unallocated() -> Self {
+            Self {
+                id: Cell::new(None),
+            }
         }
     }
 
@@ -101,7 +103,15 @@ impl Drop for OwnedThreadStorageSlot {
 crate::loom::std::thread_local! {
     /// a thread local variable which represents the storage slot currently owned by the current thread.
     #[allow(unused_parens)] // the extra parentheses are needed to make loom's `thread_local` macro properly parse the `const { ... }` expr.
-    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = (const { OwnedThreadStorageSlot::unallocated() });
+    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = {
+        // in non-loom mode, use the `const { ... }` initializer, which helps the compiler optimize this initializer.
+        // in loom mode, the constructor is no longer const, so we can't use it.
+        #[cfg(not(loom))]
+        const { OwnedThreadStorageSlot::unallocated() }
+
+        #[cfg(loom)]
+        { OwnedThreadStorageSlot::unallocated() }
+    };
 }
 
 /// returns the storage slot id of the current thread, assuming that a storage slot was already allocated for the current
