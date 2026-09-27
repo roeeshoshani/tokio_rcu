@@ -15,16 +15,36 @@ where
     let mut pinned = pin!(future);
     let mut context = std::task::Context::from_waker(std::task::Waker::noop());
     loop {
-        tokio_rcu::loom_tests_api::on_before_task_poll();
+        let res_opt = with_before_after_poll(|| {
+            if let Poll::Ready(res) = pinned.as_mut().poll(&mut context) {
+                Some(res)
+            } else {
+                None
+            }
+        });
 
-        if let Poll::Ready(res) = pinned.as_mut().poll(&mut context) {
+        if let Some(res) = res_opt {
             return res;
         }
 
-        tokio_rcu::loom_tests_api::on_after_task_poll();
-
         loom::thread::yield_now();
     }
+}
+
+fn with_before_after_poll<R, F: FnOnce() -> R>(f: F) -> R {
+    tokio_rcu::loom_tests_api::on_before_task_poll();
+    let res = f();
+    tokio_rcu::loom_tests_api::on_after_task_poll();
+    res
+}
+
+fn with_thread_stop<R, F: FnOnce() -> R>(f: F) -> R {
+    let res = f();
+    tokio_rcu::loom_tests_api::on_thread_stop();
+    res
+}
+fn loom_thread_spawn<F: FnOnce() + 'static>(f: F) -> loom::thread::JoinHandle<()> {
+    loom::thread::spawn(move || with_thread_stop(f))
 }
 
 #[test]
@@ -42,30 +62,29 @@ fn basic_read_write() {
             let uaf_detector_1 = Box::new(UafDetector::new(1));
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
-            let worker1 = loom::thread::spawn({
+
+            let worker1 = loom_thread_spawn({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
                     assert_eq!(prev.id(), 0);
-                    tokio_rcu::loom_tests_api::on_thread_stop();
                 }
             });
 
             // worker 2
-            {
-                tokio_rcu::loom_tests_api::on_before_task_poll();
-                state.with(|guard| match guard.id() {
-                    0 => {
-                        results.lock().unwrap().saw_id0 = true;
-                    }
-                    1 => {
-                        results.lock().unwrap().saw_id1 = true;
-                    }
-                    id => panic!("unexpected guard id: {id}"),
+            with_thread_stop(|| {
+                with_before_after_poll(|| {
+                    state.with(|guard| match guard.id() {
+                        0 => {
+                            results.lock().unwrap().saw_id0 = true;
+                        }
+                        1 => {
+                            results.lock().unwrap().saw_id1 = true;
+                        }
+                        id => panic!("unexpected guard id: {id}"),
+                    });
                 });
-                tokio_rcu::loom_tests_api::on_after_task_poll();
-                tokio_rcu::loom_tests_api::on_thread_stop();
-            }
+            });
 
             worker1.join().unwrap();
         }
@@ -96,23 +115,18 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
             let uaf_detector_1 = Box::new(UafDetector::new(1));
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
-            let worker1 = loom::thread::spawn({
+
+            let worker1 = loom_thread_spawn({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
                     assert_eq!(prev.id(), 0);
-                    tokio_rcu::loom_tests_api::on_thread_stop();
                 }
             });
 
             // worker 2
-            {
-                tokio_rcu::loom_tests_api::on_before_task_poll();
-
-                let guard = unsafe { state.read() };
-
-                tokio_rcu::loom_tests_api::on_after_task_poll();
-
+            with_thread_stop(|| {
+                let guard = with_before_after_poll(|| unsafe { state.read() });
                 match guard.try_id() {
                     Some(id) => match id {
                         0 => {
@@ -127,9 +141,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                         results.lock().unwrap().saw_uaf = true;
                     }
                 }
-
-                tokio_rcu::loom_tests_api::on_thread_stop();
-            }
+            });
 
             worker1.join().unwrap();
         }
