@@ -75,7 +75,7 @@ impl Notify {
         // is created.
         //
         // this may seem like a violation of rust's aliasing rules, but since `Slot` is `!Unpin`, we are allowed to create aliasing references
-        // to it.
+        // to it in this manner.
         unsafe {
             let mut waiters_list_head_ptr = self.waiters_list_head.get_mut_ptr();
             let waiters_list_head = waiters_list_head_ptr.as_mut_ref();
