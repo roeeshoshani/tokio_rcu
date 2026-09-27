@@ -69,7 +69,7 @@ unsafe impl GlobalAlloc for UafDetectorSupportingAllocator {
         let passthrough_count =
             DEALLOC_PASSTHROUGH_COUNT.with(|x| x.load(std::sync::atomic::Ordering::SeqCst));
         if passthrough_count == 0 {
-            with_dealloc_passthrough(|| {
+            let was_intercepted = with_dealloc_passthrough(|| {
                 let uaf_detector_allocs_guard = self.uaf_detector_allocs.lock();
                 let mut uaf_detector_allocs = uaf_detector_allocs_guard.borrow_mut();
                 if let Some(live_alloc_index) =
@@ -82,9 +82,16 @@ unsafe impl GlobalAlloc for UafDetectorSupportingAllocator {
                     }
                     uaf_detector_allocs.live.swap_remove(live_alloc_index);
                     uaf_detector_allocs.freed.push(ptr);
-                    return;
+                    true
+                } else {
+                    false
                 }
-            })
+            });
+
+            if was_intercepted {
+                // avoid running the real deallocation for intercepted deallocations.
+                return;
+            }
         }
         unsafe { std::alloc::System.dealloc(ptr, layout) }
     }

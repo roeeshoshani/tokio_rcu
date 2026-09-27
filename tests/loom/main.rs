@@ -58,8 +58,8 @@ fn basic_read_write() {
     loom::model({
         let results = results.clone();
         move || {
-            let uaf_detector_0 = Box::new(UafDetector::new(0));
-            let uaf_detector_1 = Box::new(UafDetector::new(1));
+            let uaf_detector_0 = UafDetector::new(0);
+            let uaf_detector_1 = UafDetector::new(1);
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
@@ -111,8 +111,8 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
     loom::model({
         let results = results.clone();
         move || {
-            let uaf_detector_0 = Box::new(UafDetector::new(0));
-            let uaf_detector_1 = Box::new(UafDetector::new(1));
+            let uaf_detector_0 = UafDetector::new(0);
+            let uaf_detector_1 = UafDetector::new(1);
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
