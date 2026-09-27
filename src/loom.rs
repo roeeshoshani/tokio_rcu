@@ -4,6 +4,8 @@ pub use loom as std;
 #[cfg(not(loom))]
 pub use std;
 
+pub mod parking_lot;
+
 /// a loom/std abstraction over [`UnsafeCell`], providing a unified API specifically tied to the use of [`UnsafeCell`] in this crate.
 ///
 /// [`UnsafeCell`]: std::cell::UnsafeCell

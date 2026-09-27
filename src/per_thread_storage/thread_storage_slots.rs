@@ -64,7 +64,7 @@ pub struct ThreadStorageSlots {
     /// it is provided as an external lock instead of wrapping the cur data directly, since the cur data is also protected from writes
     /// by writing the write lock. doing it separately allow us to access the inner data in such scenarios without having to lock this
     /// lock when it is not needed.
-    cur_data_lock: parking_lot::RwLock<CurDataLockMarker>,
+    cur_data_lock: crate::loom::parking_lot::RwLock<CurDataLockMarker>,
 
     /// a lock which is used to make writers mutually exclusive, such that at any given moment, only one writer can work.
     write_lock: crate::loom::std::sync::Mutex<WriteLockMarker>,
@@ -79,7 +79,7 @@ impl ThreadStorageSlots {
         pub const fn new() -> Self {
             Self {
                 cur_data: UnsafeCell::new(ThreadStorageSlotsCurData::new()),
-                cur_data_lock: parking_lot::RwLock::new(CurDataLockMarker),
+                cur_data_lock: crate::loom::parking_lot::RwLock::new(CurDataLockMarker),
                 write_lock: crate::loom::std::sync::Mutex::new(WriteLockMarker),
                 free_slots: UnsafeCell::new(Vec::new()),
             }
@@ -382,7 +382,7 @@ unsafe impl Sync for ThreadStorageSlots {}
 /// a read guard for the thread storage slots. dereferences into a slice of all slots.
 /// you must not block while holding this guard, and must not hold it for a "long time".
 pub struct ThreadStorageSlotsReadGuard<'a> {
-    _guard: parking_lot::RwLockReadGuard<'a, CurDataLockMarker>,
+    _guard: crate::loom::parking_lot::RwLockReadGuard<'a, CurDataLockMarker>,
     origin: &'a ThreadStorageSlots,
 }
 impl<'a> Deref for ThreadStorageSlotsReadGuard<'a> {
