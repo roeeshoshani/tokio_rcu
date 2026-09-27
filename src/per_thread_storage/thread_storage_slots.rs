@@ -108,7 +108,7 @@ impl ThreadStorageSlots {
         let cur_data_ptr = self.cur_data.get_const_ptr();
 
         // SAFETY: caller guarantees that no-one writes to the data
-        let cur_data = unsafe { cur_data_ptr.to_ref() };
+        let cur_data = unsafe { cur_data_ptr.as_ref() };
 
         // SAFETY: the slices stored are always valid slices.
         unsafe {
@@ -142,10 +142,10 @@ impl ThreadStorageSlots {
         // wait for all current readers to finish, and prevent new readers from entering.
         let _write_guard = self.cur_data_lock.write();
 
-        let cur_data_ptr = self.cur_data.get_mut_ptr();
+        let mut cur_data_ptr = self.cur_data.get_mut_ptr();
 
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
-        let cur_data = unsafe { cur_data_ptr.to_mut_ref() };
+        let cur_data = unsafe { cur_data_ptr.as_mut_ref() };
 
         f(cur_data)
     }
@@ -164,10 +164,10 @@ impl ThreadStorageSlots {
         let write_guard = self.write_lock.lock().unwrap();
 
         let free_slot_opt = {
-            let free_slots_ptr = self.free_slots.get_mut_ptr();
+            let mut free_slots_ptr = self.free_slots.get_mut_ptr();
 
             // SAFETY: we are holding the write lock.
-            let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
+            let free_slots = unsafe { free_slots_ptr.as_mut_ref() };
 
             free_slots.pop()
         };
@@ -264,7 +264,7 @@ impl ThreadStorageSlots {
             let cur_data_ptr = self.cur_data.get_const_ptr();
 
             // SAFETY: we are holding the write lock, so no one can write to this other than us.
-            let cur_data = unsafe { cur_data_ptr.to_ref() };
+            let cur_data = unsafe { cur_data_ptr.as_ref() };
 
             cur_data.capacity
         };
@@ -295,7 +295,7 @@ impl ThreadStorageSlots {
             let cur_data_ptr = self.cur_data.get_const_ptr();
 
             // SAFETY: we are holding the write lock, so no one can write to this other than us.
-            let cur_data = unsafe { cur_data_ptr.to_ref() };
+            let cur_data = unsafe { cur_data_ptr.as_ref() };
 
             (
                 cur_data.ptr,
@@ -320,7 +320,7 @@ impl ThreadStorageSlots {
             // update the len to the new incremented len
             {
                 let cur_data_ptr = self.cur_data.get_const_ptr();
-                let cur_data = unsafe { cur_data_ptr.to_ref() };
+                let cur_data = unsafe { cur_data_ptr.as_ref() };
                 cur_data.len.store(
                     new_data.len().to_raw_index(),
                     // use release ordering to make sure that the previous write to the new slot happens before the len increment.
@@ -384,10 +384,10 @@ impl ThreadStorageSlots {
             atomic::Ordering::Release,
         );
 
-        let free_slots_ptr = self.free_slots.get_mut_ptr();
+        let mut free_slots_ptr = self.free_slots.get_mut_ptr();
 
         // SAFETY: we are holding the write lock.
-        let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
+        let free_slots = unsafe { free_slots_ptr.as_mut_ref() };
 
         free_slots.push(slot_id);
     }
@@ -397,7 +397,7 @@ impl Drop for ThreadStorageSlots {
         let cur_data_ptr = self.cur_data.get_const_ptr();
 
         // SAFETY: we have exclusive access over `self`, so no-one can concurrently acces the data inside it.
-        let cur_data = unsafe { cur_data_ptr.to_ref() };
+        let cur_data = unsafe { cur_data_ptr.as_ref() };
         if cur_data.capacity != 0 {
             let _ = unsafe {
                 TypedVec::<ThreadStorageSlotId, ThreadStorageSlotValue>::from_raw_parts_unchecked(

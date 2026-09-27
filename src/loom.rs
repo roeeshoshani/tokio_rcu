@@ -91,7 +91,7 @@ impl<T> CellDataMutPtr<T> {
     /// # Safety
     ///
     /// the pointer must be non-null.
-    pub unsafe fn to_non_null_unchecked(self) -> CellDataNonNullPtr<T> {
+    pub unsafe fn into_non_null_unchecked(self) -> CellDataNonNullPtr<T> {
         #[cfg(not(loom))]
         unsafe {
             CellDataNonNullPtr {
@@ -111,7 +111,7 @@ impl<T> CellDataMutPtr<T> {
     /// pointer must be valid and must be allowed to be converted to a mut ref according to the regular aliasing rules.
     ///
     /// this basically has the same safety requirements as doing `&mut *ptr` on this pointer, if it were a regular pointer.
-    pub unsafe fn to_mut_ref(&self) -> &mut T {
+    pub unsafe fn as_mut_ref(&mut self) -> &mut T {
         #[cfg(not(loom))]
         unsafe {
             &mut *self.raw
@@ -170,7 +170,7 @@ impl<T> CellDataConstPtr<T> {
     /// pointer must be valid and must be allowed to be converted to an immutable ref according to the regular aliasing rules.
     ///
     /// this basically has the same safety requirements as doing `&*ptr` on this pointer, if it were a regular pointer.
-    pub unsafe fn to_ref(&self) -> &T {
+    pub unsafe fn as_ref(&self) -> &T {
         #[cfg(not(loom))]
         unsafe {
             &*self.raw

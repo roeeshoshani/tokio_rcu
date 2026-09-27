@@ -100,18 +100,14 @@ impl Drop for OwnedThreadStorageSlot {
     }
 }
 
-crate::loom::std::thread_local! {
+#[cfg(not(loom))]
+std::thread_local! {
     /// a thread local variable which represents the storage slot currently owned by the current thread.
-    #[allow(unused_parens)] // the extra parentheses are needed to make loom's `thread_local` macro properly parse the `const { ... }` expr.
-    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = {
-        // in non-loom mode, use the `const { ... }` initializer, which helps the compiler optimize this initializer.
-        // in loom mode, the constructor is no longer const, so we can't use it.
-        #[cfg(not(loom))]
-        const { OwnedThreadStorageSlot::unallocated() }
-
-        #[cfg(loom)]
-        { OwnedThreadStorageSlot::unallocated() }
-    };
+    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = const { OwnedThreadStorageSlot::unallocated() };
+}
+#[cfg(loom)]
+loom::thread_local! {
+    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = OwnedThreadStorageSlot::unallocated();
 }
 
 /// returns the storage slot id of the current thread, assuming that a storage slot was already allocated for the current

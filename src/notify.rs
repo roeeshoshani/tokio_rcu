@@ -77,8 +77,8 @@ impl Notify {
         // this may seem like a violation of rust's aliasing rules, but since `Slot` is `!Unpin`, we are allowd to create aliasing references
         // to it.
         unsafe {
-            let waiters_list_head_ptr = self.waiters_list_head.get_mut_ptr();
-            let waiters_list_head = waiters_list_head_ptr.to_mut_ref();
+            let mut waiters_list_head_ptr = self.waiters_list_head.get_mut_ptr();
+            let waiters_list_head = waiters_list_head_ptr.as_mut_ref();
 
             while let Some(cur_head) = *waiters_list_head {
                 let slot = cur_head.as_ref();
@@ -205,8 +205,8 @@ impl<'a> Future for Notified<'a> {
                 match is_in_list {
                     true => {
                         // already in the list, update our waker
-                        let waker_ptr = self.slot.waker.get_mut_ptr();
-                        let waker = waker_ptr.to_mut_ref();
+                        let mut waker_ptr = self.slot.waker.get_mut_ptr();
+                        let waker = waker_ptr.as_mut_ref();
                         match &*waker {
                             // note that even if `will_wake` panics we leave everything in a clean state.
                             Some(existing_waker) if existing_waker.will_wake(cx.waker()) => {
@@ -242,7 +242,7 @@ impl<'a> Future for Notified<'a> {
                             if let Some(head_nonnull) = head_opt {
                                 let head = head_nonnull.as_ref();
                                 head.pprev.get_mut_ptr().write(Some(
-                                    self.slot.next.get_mut_ptr().to_non_null_unchecked(),
+                                    self.slot.next.get_mut_ptr().into_non_null_unchecked(),
                                 ));
                             }
 
