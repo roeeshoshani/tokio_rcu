@@ -13,12 +13,14 @@ pub struct UnsafeCell<T>(std::cell::UnsafeCell<T>);
 impl<T> UnsafeCell<T> {
     fn_const_if_not_loom! {
         /// creates a new unsafe cell containing the given value.
+        #[inline(always)]
         pub const fn new(value: T) -> Self {
             Self(std::cell::UnsafeCell::new(value))
         }
     }
 
     /// returns a const pointer to the wrapped value.
+    #[inline(always)]
     pub fn get_const_ptr(&self) -> CellDataConstPtr<T> {
         #[cfg(not(loom))]
         {
@@ -32,6 +34,7 @@ impl<T> UnsafeCell<T> {
     }
 
     /// returns a mutable pointer to the wrapped value.
+    #[inline(always)]
     pub fn get_mut_ptr(&self) -> CellDataMutPtr<T> {
         #[cfg(not(loom))]
         {
@@ -66,6 +69,7 @@ impl<T> CellDataNonNullPtr<T> {
     /// # Safety
     ///
     /// same safety requirements as [`std::ptr::write`].
+    #[inline(always)]
     pub unsafe fn write(&self, value: T) {
         #[cfg(not(loom))]
         unsafe {
@@ -91,6 +95,7 @@ impl<T> CellDataMutPtr<T> {
     /// # Safety
     ///
     /// the pointer must be non-null.
+    #[inline(always)]
     pub unsafe fn into_non_null_unchecked(self) -> CellDataNonNullPtr<T> {
         #[cfg(not(loom))]
         unsafe {
@@ -111,6 +116,7 @@ impl<T> CellDataMutPtr<T> {
     /// pointer must be valid and must be allowed to be converted to a mut ref according to the regular aliasing rules.
     ///
     /// this basically has the same safety requirements as doing `&mut *ptr` on this pointer, if it were a regular pointer.
+    #[inline(always)]
     pub unsafe fn as_mut_ref(&mut self) -> &mut T {
         #[cfg(not(loom))]
         unsafe {
@@ -127,6 +133,7 @@ impl<T> CellDataMutPtr<T> {
     /// # Safety
     ///
     /// same safety requirements as [`std::ptr::write`].
+    #[inline(always)]
     pub unsafe fn write(&self, value: T) {
         #[cfg(not(loom))]
         unsafe {
@@ -143,6 +150,7 @@ impl<T> CellDataMutPtr<T> {
     /// # Safety
     ///
     /// same safety requirements as [`std::ptr::replace`].
+    #[inline(always)]
     pub unsafe fn replace(&self, value: T) -> T {
         #[cfg(not(loom))]
         unsafe {
@@ -170,6 +178,7 @@ impl<T> CellDataConstPtr<T> {
     /// pointer must be valid and must be allowed to be converted to an immutable ref according to the regular aliasing rules.
     ///
     /// this basically has the same safety requirements as doing `&*ptr` on this pointer, if it were a regular pointer.
+    #[inline(always)]
     pub unsafe fn as_ref(&self) -> &T {
         #[cfg(not(loom))]
         unsafe {
@@ -189,6 +198,7 @@ impl<T: Copy> CellDataConstPtr<T> {
     /// pointer must be valid for reading.
     ///
     /// this basically has the same safety requirements as doing `*ptr` on this pointer, if it were a regular pointer.
+    #[inline(always)]
     pub unsafe fn read(&self) -> T {
         #[cfg(not(loom))]
         unsafe {

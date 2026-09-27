@@ -16,12 +16,14 @@ pub struct RwLock<T>(InnerRwLock<T>);
 impl<T> RwLock<T> {
     fn_const_if_not_loom! {
         /// creates a new rwlock with the given initial value.
+        #[inline(always)]
         pub const fn new(value: T) -> Self {
             Self(InnerRwLock::new(value))
         }
     }
 
     /// locks this rwlock for reading.
+    #[inline(always)]
     pub fn read(&self) -> RwLockReadGuard<'_, T> {
         #[cfg(not(loom))]
         {
@@ -39,6 +41,7 @@ impl<T> RwLock<T> {
     }
 
     /// locks this rwlock for writing.
+    #[inline(always)]
     pub fn write(&self) -> RwLockWriteGuard<'_, T> {
         #[cfg(not(loom))]
         {
