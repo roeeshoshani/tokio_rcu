@@ -53,9 +53,11 @@ fn no_uaf_basic() {
         let worker2 = loom_spawn({
             let state = state.clone();
             move || {
+                tokio_rcu::loom_tests_api::on_before_task_poll();
                 state.with(|guard| {
                     assert!(*guard == "initial" || *guard == "new");
                 });
+                tokio_rcu::loom_tests_api::on_after_task_poll();
                 tokio_rcu::loom_tests_api::on_thread_stop();
             }
         });
