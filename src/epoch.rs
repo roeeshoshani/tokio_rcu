@@ -1,4 +1,4 @@
-use crate::loom_or_std::{static_or_loom_lazy_static, sync::atomic};
+use crate::loom::{static_or_loom_lazy_static, std::sync::atomic};
 
 use branches::unlikely;
 

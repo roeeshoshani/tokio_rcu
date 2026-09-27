@@ -9,7 +9,7 @@ use index_type::IndexType;
 
 use crate::{
     atomic_type::Atomic,
-    loom_or_std::static_or_loom_lazy_static,
+    loom::static_or_loom_lazy_static,
     thread_state::{EncodedThreadState, ThreadState},
 };
 
@@ -98,7 +98,7 @@ impl Drop for OwnedThreadStorageSlot {
     }
 }
 
-crate::loom_or_std::thread_local! {
+crate::loom::std::thread_local! {
     /// a thread local variable which represents the storage slot currently owned by the current thread.
     #[allow(unused_parens)] // the extra parentheses are needed to make loom's `thread_local` macro properly parse the `const { ... }` expr.
     static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = (const { OwnedThreadStorageSlot::unallocated() });

@@ -5,7 +5,7 @@
 use std::ops::Deref;
 
 use crate::{
-    loom_or_std::sync::atomic::{self, AtomicPtr},
+    loom::std::sync::atomic::{self, AtomicPtr},
     per_thread_storage::this_thread_does_have_allocated_storage_slot,
     synchronize_rcu,
     utils::{PhantomUnsend, PtrMutSendSync},

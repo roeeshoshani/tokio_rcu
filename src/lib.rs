@@ -251,12 +251,12 @@
 //! [`on_after_task_poll`]: tokio::runtime::Builder::on_after_task_poll
 //! [`RcuBox`]: rcu_box::RcuBox
 //! [`RcuBox::read`]: rcu_box::RcuBox::read
-use loom_or_std::sync::atomic;
+use loom::std::sync::atomic;
 use std::task::Poll;
 
 use crate::{
     epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
-    loom_or_std::static_or_loom_lazy_static,
+    loom::static_or_loom_lazy_static,
     notify::Notify,
     per_thread_storage::{
         this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
@@ -268,7 +268,7 @@ use crate::{
 
 mod atomic_type;
 mod epoch;
-mod loom_or_std;
+mod loom;
 mod notify;
 mod per_thread_storage;
 pub mod rcu_box;

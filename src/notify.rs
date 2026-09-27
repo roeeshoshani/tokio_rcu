@@ -6,16 +6,16 @@ use std::{
     task::{Poll, Waker},
 };
 
-use crate::loom_or_std::{
+use crate::loom::{
     CellDataNonNullPtr, UnsafeCell, fn_const_if_not_loom,
-    sync::atomic::{self, AtomicUsize},
+    std::sync::atomic::{self, AtomicUsize},
 };
 
 /// a synchronization data structure used to pass notifications between different tasks.
 /// similar in functionality to [`tokio::sync::Notify`], but a simplified version of it more tailored to the specific use in this crate.
 pub struct Notify {
     num_wakeups: AtomicUsize,
-    lock: crate::loom_or_std::sync::Mutex<()>,
+    lock: crate::loom::std::sync::Mutex<()>,
     waiters_list_head: UnsafeCell<Next>,
 }
 impl Notify {
@@ -24,7 +24,7 @@ impl Notify {
         pub const fn new() -> Self {
             Self {
                 num_wakeups: AtomicUsize::new(0),
-                lock: crate::loom_or_std::sync::Mutex::new(()),
+                lock: crate::loom::std::sync::Mutex::new(()),
                 waiters_list_head: UnsafeCell::new(None),
             }
         }

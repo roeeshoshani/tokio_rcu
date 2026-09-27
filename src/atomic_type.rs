@@ -1,6 +1,6 @@
-use crate::loom_or_std::{
+use crate::loom::{
     fn_const_if_not_loom,
-    sync::atomic::{self, AtomicU8, AtomicU16, AtomicU32},
+    std::sync::atomic::{self, AtomicU8, AtomicU16, AtomicU32},
 };
 
 pub trait HasAtomicType {

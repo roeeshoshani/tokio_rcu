@@ -1,18 +1,18 @@
 #[cfg(loom)]
-pub use loom::*;
+pub use loom as std;
 
 #[cfg(not(loom))]
-pub use std::*;
+pub use std;
 
 /// a loom/std abstraction over [`UnsafeCell`], providing a unified API specifically tied to the use of [`UnsafeCell`] in this crate.
 ///
 /// [`UnsafeCell`]: std::cell::UnsafeCell
-pub struct UnsafeCell<T>(cell::UnsafeCell<T>);
+pub struct UnsafeCell<T>(std::cell::UnsafeCell<T>);
 impl<T> UnsafeCell<T> {
     fn_const_if_not_loom! {
         /// creates a new unsafe cell containing the given value.
         pub const fn new(value: T) -> Self {
-            Self(cell::UnsafeCell::new(value))
+            Self(std::cell::UnsafeCell::new(value))
         }
     }
 
@@ -202,7 +202,7 @@ macro_rules! static_or_loom_lazy_static {
             static $name: $ty = $value;
 
             #[cfg(loom)]
-            loom::lazy_static! {
+            ::loom::lazy_static! {
                 $(#[$attr])*
                 static ref $name: $ty = $value;
             }
