@@ -25,6 +25,16 @@ where
 }
 
 /// a type used to detect use after free scenarios.
+///
+/// this type contains a 64-bit magic value which initially contains one of 256 hardcoded pre-defined random 64-bit integers, chosen according
+/// to the chosen id for this uaf detector.
+///
+/// when this type is dropped, it overwrites the magic with a "freed" magic, which indicates that this type was freed.
+///
+/// furthermore, if the memory containing this type is freed and is then re-used for another purpose, it will most likely be overwritten with some
+/// value that does not match one of the pre-defined valid magic values.
+/// this is of course unless it is overwritten with another UAF detector, in which case it will look valid even though it is actually a UAF situation.
+/// so, it is advised to pre-allocate all UAF detectors in advance, or just to avoid freeing one and then allocating another.
 struct UafDetector {
     magic: u64,
 }
@@ -319,11 +329,14 @@ impl Drop for UafDetector {
 #[test]
 fn no_uaf_basic() {
     loom::model(|| {
-        let state = Arc::new(RcuBox::new(Box::new(UafDetector::new(0))));
+        let uaf_detector_0 = Box::new(UafDetector::new(0));
+        let uaf_detector_1 = Box::new(UafDetector::new(1));
+
+        let state = Arc::new(RcuBox::new(uaf_detector_0));
         let worker1 = loom::thread::spawn({
             let state = state.clone();
             move || {
-                let prev = busy_block_on_future(state.swap(Box::new(UafDetector::new(1))));
+                let prev = busy_block_on_future(state.swap(uaf_detector_1));
                 assert_eq!(prev.id(), 0);
                 tokio_rcu::loom_tests_api::on_thread_stop();
             }
