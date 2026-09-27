@@ -120,7 +120,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       RUSTFLAGS: --cfg loom
-      LOOM_MAX_PREEMPTIONS: 6
+      LOOM_MAX_PREEMPTIONS: 7
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
