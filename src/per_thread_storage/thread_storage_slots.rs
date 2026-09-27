@@ -105,7 +105,7 @@ impl ThreadStorageSlots {
     /// you must guarantee that during this operation, no-one will swap the current data.
     /// you must also make sure to only use the returned slice as long as it is guaranteed that no-one will swap the current data.
     unsafe fn cur_data_as_slice(&self) -> &TypedSlice<ThreadStorageSlotId, ThreadStorageSlotValue> {
-        let cur_data_ptr = self.cur_data.get();
+        let cur_data_ptr = self.cur_data.get_mut_ptr();
 
         // SAFETY: caller guarantees that no-one writes to the data
         let cur_data = unsafe { cur_data_ptr.to_ref() };
@@ -142,7 +142,7 @@ impl ThreadStorageSlots {
         // wait for all current readers to finish, and prevent new readers from entering.
         let _write_guard = self.cur_data_lock.write();
 
-        let cur_data_ptr = self.cur_data.get();
+        let cur_data_ptr = self.cur_data.get_mut_ptr();
 
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
         let cur_data = unsafe { cur_data_ptr.to_mut_ref() };
@@ -164,7 +164,7 @@ impl ThreadStorageSlots {
         let write_guard = self.write_lock.lock().unwrap();
 
         let free_slot_opt = {
-            let free_slots_ptr = self.free_slots.get();
+            let free_slots_ptr = self.free_slots.get_mut_ptr();
 
             // SAFETY: we are holding the write lock.
             let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
@@ -261,7 +261,7 @@ impl ThreadStorageSlots {
         };
 
         let capacity = {
-            let cur_data_ptr = self.cur_data.get();
+            let cur_data_ptr = self.cur_data.get_mut_ptr();
 
             // SAFETY: we are holding the write lock, so no one can write to this other than us.
             let cur_data = unsafe { cur_data_ptr.to_ref() };
@@ -291,7 +291,7 @@ impl ThreadStorageSlots {
         new_slot_value: ThreadStorageSlotValue,
         write_guard: crate::loom::std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
-        let cur_data_ptr = self.cur_data.get();
+        let cur_data_ptr = self.cur_data.get_mut_ptr();
 
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
         let cur_data = unsafe { cur_data_ptr.to_ref() };
@@ -374,7 +374,7 @@ impl ThreadStorageSlots {
             atomic::Ordering::Release,
         );
 
-        let free_slots_ptr = self.free_slots.get();
+        let free_slots_ptr = self.free_slots.get_mut_ptr();
 
         // SAFETY: we are holding the write lock.
         let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
@@ -384,7 +384,7 @@ impl ThreadStorageSlots {
 }
 impl Drop for ThreadStorageSlots {
     fn drop(&mut self) {
-        let cur_data_ptr = self.cur_data.get();
+        let cur_data_ptr = self.cur_data.get_mut_ptr();
 
         // SAFETY: we have exclusive access over `self`, so no-one can concurrently acces the data inside it.
         let cur_data = unsafe { cur_data_ptr.to_mut_ref() };

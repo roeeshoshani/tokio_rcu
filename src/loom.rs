@@ -18,8 +18,21 @@ impl<T> UnsafeCell<T> {
         }
     }
 
+    /// returns a const pointer to the wrapped value.
+    pub fn get_const_ptr(&self) -> CellDataConstPtr<T> {
+        #[cfg(not(loom))]
+        {
+            CellDataConstPtr { raw: self.0.get() }
+        }
+
+        #[cfg(loom)]
+        {
+            CellDataConstPtr { raw: self.0.get() }
+        }
+    }
+
     /// returns a mutable pointer to the wrapped value.
-    pub fn get(&self) -> CellDataMutPtr<T> {
+    pub fn get_mut_ptr(&self) -> CellDataMutPtr<T> {
         #[cfg(not(loom))]
         {
             CellDataMutPtr { raw: self.0.get() }
@@ -179,6 +192,51 @@ impl<T: Copy> CellDataMutPtr<T> {
     }
 }
 
+/// a loom/std abstraction over a const pointer (`*const T`) to the data contained inside a cell.
+pub struct CellDataConstPtr<T> {
+    #[cfg(not(loom))]
+    raw: *const T,
+    #[cfg(loom)]
+    raw: loom::cell::ConstPtr<T>,
+}
+impl<T> CellDataConstPtr<T> {
+    /// converts the pointer to an immutable reference.
+    ///
+    /// # Safety
+    ///
+    /// pointer must be valid and must be allowed to be converted to an immutable ref according to the regular aliasing rules.
+    ///
+    /// this basically has the same safety requirements as doing `&*ptr` on this pointer, if it were a regular pointer.
+    pub unsafe fn to_ref(&self) -> &T {
+        #[cfg(not(loom))]
+        unsafe {
+            &*self.raw
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.deref()
+        }
+    }
+}
+impl<T: Copy> CellDataConstPtr<T> {
+    /// reads the data pointed at by this pointer and copies its contents.
+    ///
+    /// # Safety
+    ///
+    /// pointer must be valid for reading.
+    ///
+    /// this basically has the same safety requirements as doing `*ptr` on this pointer, if it were a regular pointer.
+    pub unsafe fn read(&self) -> T {
+        #[cfg(not(loom))]
+        unsafe {
+            *self.raw
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.with(|ptr| *ptr)
+        }
+    }
+}
 /// makes the given function constant only when not running under loom.
 ///
 /// this is needed since several types in this crate have a `const` constructor which is required for the statics which hold them,
