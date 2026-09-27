@@ -1,4 +1,4 @@
-use std::{cell::UnsafeCell, ops::Deref, ptr::NonNull};
+use std::{ops::Deref, ptr::NonNull};
 
 use branches::likely;
 use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
@@ -6,7 +6,7 @@ use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
 use crate::{
     atomic_type::Atomic,
     loom::{
-        fn_const_if_not_loom,
+        UnsafeCell, fn_const_if_not_loom,
         std::sync::atomic::{self, AtomicUsize},
     },
     per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlotValue},
@@ -105,8 +105,10 @@ impl ThreadStorageSlots {
     /// you must guarantee that during this operation, no-one will swap the current data.
     /// you must also make sure to only use the returned slice as long as it is guaranteed that no-one will swap the current data.
     unsafe fn cur_data_as_slice(&self) -> &TypedSlice<ThreadStorageSlotId, ThreadStorageSlotValue> {
+        let cur_data_ptr = self.cur_data.get();
+
         // SAFETY: caller guarantees that no-one writes to the data
-        let cur_data = unsafe { &*self.cur_data.get() };
+        let cur_data = unsafe { cur_data_ptr.to_ref() };
 
         // SAFETY: the slices stored are always valid slices.
         unsafe {
@@ -140,8 +142,10 @@ impl ThreadStorageSlots {
         // wait for all current readers to finish, and prevent new readers from entering.
         let _write_guard = self.cur_data_lock.write();
 
+        let cur_data_ptr = self.cur_data.get();
+
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
-        let cur_data = unsafe { &mut *self.cur_data.get() };
+        let cur_data = unsafe { cur_data_ptr.to_mut_ref() };
 
         f(cur_data)
     }
@@ -159,8 +163,10 @@ impl ThreadStorageSlots {
         // synchronize with other writers. at any given point, only one writer can work.
         let write_guard = self.write_lock.lock().unwrap();
 
+        let free_slots_ptr = self.free_slots.get();
+
         // SAFETY: we are holding the write lock.
-        let free_slots = unsafe { &mut *self.free_slots.get() };
+        let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
 
         match free_slots.pop() {
             Some(free_slot_id) => {
@@ -250,8 +256,10 @@ impl ThreadStorageSlots {
             state: Atomic::<EncodedThreadState>::new(encoded_initial_thread_state),
         };
 
+        let cur_data_ptr = self.cur_data.get();
+
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
-        let cur_data = unsafe { &*self.cur_data.get() };
+        let cur_data = unsafe { cur_data_ptr.to_ref() };
 
         if cur_data.capacity == 0 {
             // no storage vector currently allocated, allocate a new one.
@@ -275,8 +283,10 @@ impl ThreadStorageSlots {
         new_slot_value: ThreadStorageSlotValue,
         write_guard: crate::loom::std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
+        let cur_data_ptr = self.cur_data.get();
+
         // SAFETY: we are holding the write lock, so no one can write to this other than us.
-        let cur_data = unsafe { &*self.cur_data.get() };
+        let cur_data = unsafe { cur_data_ptr.to_ref() };
 
         let len = cur_data.len.load(
             // ordering doesn't matter, we have exclusive access to this field due to the write lock
@@ -356,14 +366,20 @@ impl ThreadStorageSlots {
             atomic::Ordering::Release,
         );
 
+        let free_slots_ptr = self.free_slots.get();
+
         // SAFETY: we are holding the write lock.
-        let free_slots = unsafe { &mut *self.free_slots.get() };
+        let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
+
         free_slots.push(slot_id);
     }
 }
 impl Drop for ThreadStorageSlots {
     fn drop(&mut self) {
-        let cur_data = self.cur_data.get_mut();
+        let cur_data_ptr = self.cur_data.get();
+
+        // SAFETY: we have exclusive access over `self`, so no-one can concurrently acces the data inside it.
+        let cur_data = unsafe { cur_data_ptr.to_mut_ref() };
         if cur_data.capacity != 0 {
             let _ = unsafe {
                 TypedVec::<ThreadStorageSlotId, ThreadStorageSlotValue>::from_raw_parts_unchecked(

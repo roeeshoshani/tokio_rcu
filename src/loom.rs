@@ -19,13 +19,7 @@ impl<T> UnsafeCell<T> {
     }
 
     /// returns a mutable pointer to the wrapped value.
-    ///
-    /// # Safety
-    ///
-    /// same safety requirements as [`UnsafeCell`].
-    ///
-    /// [`UnsafeCell`]: std::cell::UnsafeCell
-    pub unsafe fn get(&self) -> CellDataMutPtr<T> {
+    pub fn get(&self) -> CellDataMutPtr<T> {
         #[cfg(not(loom))]
         {
             CellDataMutPtr { raw: self.0.get() }
@@ -79,6 +73,11 @@ pub struct CellDataMutPtr<T> {
     raw: loom::cell::MutPtr<T>,
 }
 impl<T> CellDataMutPtr<T> {
+    /// converts this pointer to a non-null pointer.
+    ///
+    /// # Safety
+    ///
+    /// the pointer must be non-null.
     pub unsafe fn to_non_null_unchecked(self) -> CellDataNonNullPtr<T> {
         #[cfg(not(loom))]
         unsafe {
@@ -91,6 +90,25 @@ impl<T> CellDataMutPtr<T> {
             CellDataNonNullPtr { raw: self.raw }
         }
     }
+
+    /// converts the pointer to an immutable reference.
+    ///
+    /// # Safety
+    ///
+    /// pointer must be valid and must be allowed to be converted to an immutable ref according to the regular aliasing rules.
+    ///
+    /// this basically has the same safety requirements as doing `&*ptr` on this pointer, if it were a regular pointer.
+    pub unsafe fn to_ref(&self) -> &T {
+        #[cfg(not(loom))]
+        unsafe {
+            &*self.raw
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.deref()
+        }
+    }
+
     /// converts the pointer to a mutable reference.
     ///
     /// # Safety
