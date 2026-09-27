@@ -163,12 +163,16 @@ impl ThreadStorageSlots {
         // synchronize with other writers. at any given point, only one writer can work.
         let write_guard = self.write_lock.lock().unwrap();
 
-        let free_slots_ptr = self.free_slots.get();
+        let free_slot_opt = {
+            let free_slots_ptr = self.free_slots.get();
 
-        // SAFETY: we are holding the write lock.
-        let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
+            // SAFETY: we are holding the write lock.
+            let free_slots = unsafe { free_slots_ptr.to_mut_ref() };
 
-        match free_slots.pop() {
+            free_slots.pop()
+        };
+
+        match free_slot_opt {
             Some(free_slot_id) => {
                 // have a free slot in the existing storage, use it.
                 // SAFETY: the free slot id originated from the list of free slot ids.
@@ -256,12 +260,16 @@ impl ThreadStorageSlots {
             state: Atomic::<EncodedThreadState>::new(encoded_initial_thread_state),
         };
 
-        let cur_data_ptr = self.cur_data.get();
+        let capacity = {
+            let cur_data_ptr = self.cur_data.get();
 
-        // SAFETY: we are holding the write lock, so no one can write to this other than us.
-        let cur_data = unsafe { cur_data_ptr.to_ref() };
+            // SAFETY: we are holding the write lock, so no one can write to this other than us.
+            let cur_data = unsafe { cur_data_ptr.to_ref() };
 
-        if cur_data.capacity == 0 {
+            cur_data.capacity
+        };
+
+        if capacity == 0 {
             // no storage vector currently allocated, allocate a new one.
             // SAFETY: capacity is zero so the current buffer is empty
             unsafe { self.alloc_no_cur_data(new_slot_value, write_guard) }
