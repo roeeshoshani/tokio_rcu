@@ -396,7 +396,7 @@ impl Drop for ThreadStorageSlots {
     fn drop(&mut self) {
         let cur_data_ptr = self.cur_data.get_const_ptr();
 
-        // SAFETY: we have exclusive access over `self`, so no-one can concurrently acces the data inside it.
+        // SAFETY: we have exclusive access over `self`, so no-one can concurrently access the data inside it.
         let cur_data = unsafe { cur_data_ptr.as_ref() };
         if cur_data.capacity != 0 {
             let _ = unsafe {

@@ -71,10 +71,10 @@ impl Notify {
         // SAFETY: in the following code, we assume exclusivity over all data in the list due to the lock.
         //
         // furthermore, note that we are creating referencing to `Slot`s inside the list which may alias concurrently existing `&mut Slot`
-        // referecnes that exist for those slots due to them being contained in `Notified`, and when `Notified` is polled, a `&mut Notified`
+        // references that exist for those slots due to them being contained in `Notified`, and when `Notified` is polled, a `&mut Notified`
         // is created.
         //
-        // this may seem like a violation of rust's aliasing rules, but since `Slot` is `!Unpin`, we are allowd to create aliasing references
+        // this may seem like a violation of rust's aliasing rules, but since `Slot` is `!Unpin`, we are allowed to create aliasing references
         // to it.
         unsafe {
             let mut waiters_list_head_ptr = self.waiters_list_head.get_mut_ptr();
