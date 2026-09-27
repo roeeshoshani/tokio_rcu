@@ -87,7 +87,7 @@ impl Notify {
                 // we do this so that if its wake callback panics, we leave the list in a reasonable state.
 
                 // grab the next slot in the list.
-                let next_ptr_opt = slot.next.get_mut_ptr().read();
+                let next_ptr_opt = slot.next.get_const_ptr().read();
 
                 // make the next slot the new head of the list, removing ourselves from it
                 *waiters_list_head = next_ptr_opt;
@@ -199,7 +199,7 @@ impl<'a> Future for Notified<'a> {
 
             // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
             unsafe {
-                let is_in_list = self.slot.is_in_list.get_mut_ptr().read();
+                let is_in_list = self.slot.is_in_list.get_const_ptr().read();
 
                 // insert us into the waker list, or update our waker if we're already in the list
                 match is_in_list {
@@ -235,7 +235,7 @@ impl<'a> Future for Notified<'a> {
                                 .write(Some(cx.waker().clone()));
                             self.slot.is_in_list.get_mut_ptr().write(true);
 
-                            let head_opt = self.notify.waiters_list_head.get_mut_ptr().read();
+                            let head_opt = self.notify.waiters_list_head.get_const_ptr().read();
                             self.slot.next.get_mut_ptr().write(head_opt);
                             self.slot.pprev.get_mut_ptr().write(None);
 
@@ -296,12 +296,12 @@ impl<'a> Drop for Notified<'a> {
             Ok(_guard) => {
                 // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
                 unsafe {
-                    let is_in_list = self.slot.is_in_list.get_mut_ptr().read();
+                    let is_in_list = self.slot.is_in_list.get_const_ptr().read();
                     if is_in_list {
                         // remove ourselves from the list
 
                         let pprev_opt = self.slot.pprev.get_mut_ptr().replace(None);
-                        let next_opt = self.slot.next.get_mut_ptr().read();
+                        let next_opt = self.slot.next.get_const_ptr().read();
 
                         // set prev's next to our next
                         match &pprev_opt {
@@ -311,7 +311,7 @@ impl<'a> Drop for Notified<'a> {
                             None => {
                                 // when we are in the list but pprev is `None`, it means that we are the head of the list
                                 debug_assert_eq!(
-                                    self.notify.waiters_list_head.get_mut_ptr().read(),
+                                    self.notify.waiters_list_head.get_const_ptr().read(),
                                     Some(NonNull::from_ref(&self.slot))
                                 );
 

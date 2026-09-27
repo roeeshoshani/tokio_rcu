@@ -104,24 +104,6 @@ impl<T> CellDataMutPtr<T> {
         }
     }
 
-    /// converts the pointer to an immutable reference.
-    ///
-    /// # Safety
-    ///
-    /// pointer must be valid and must be allowed to be converted to an immutable ref according to the regular aliasing rules.
-    ///
-    /// this basically has the same safety requirements as doing `&*ptr` on this pointer, if it were a regular pointer.
-    pub unsafe fn to_ref(&self) -> &T {
-        #[cfg(not(loom))]
-        unsafe {
-            &*self.raw
-        }
-        #[cfg(loom)]
-        unsafe {
-            self.raw.deref()
-        }
-    }
-
     /// converts the pointer to a mutable reference.
     ///
     /// # Safety
@@ -169,25 +151,6 @@ impl<T> CellDataMutPtr<T> {
         #[cfg(loom)]
         unsafe {
             self.raw.with(|ptr| ptr.replace(value))
-        }
-    }
-}
-impl<T: Copy> CellDataMutPtr<T> {
-    /// reads the data pointed at by this pointer and copies its contents.
-    ///
-    /// # Safety
-    ///
-    /// pointer must be valid for reading.
-    ///
-    /// this basically has the same safety requirements as doing `*ptr` on this pointer, if it were a regular pointer.
-    pub unsafe fn read(&self) -> T {
-        #[cfg(not(loom))]
-        unsafe {
-            *self.raw
-        }
-        #[cfg(loom)]
-        unsafe {
-            self.raw.with(|ptr| *ptr)
         }
     }
 }

@@ -105,7 +105,7 @@ impl ThreadStorageSlots {
     /// you must guarantee that during this operation, no-one will swap the current data.
     /// you must also make sure to only use the returned slice as long as it is guaranteed that no-one will swap the current data.
     unsafe fn cur_data_as_slice(&self) -> &TypedSlice<ThreadStorageSlotId, ThreadStorageSlotValue> {
-        let cur_data_ptr = self.cur_data.get_mut_ptr();
+        let cur_data_ptr = self.cur_data.get_const_ptr();
 
         // SAFETY: caller guarantees that no-one writes to the data
         let cur_data = unsafe { cur_data_ptr.to_ref() };
@@ -261,7 +261,7 @@ impl ThreadStorageSlots {
         };
 
         let capacity = {
-            let cur_data_ptr = self.cur_data.get_mut_ptr();
+            let cur_data_ptr = self.cur_data.get_const_ptr();
 
             // SAFETY: we are holding the write lock, so no one can write to this other than us.
             let cur_data = unsafe { cur_data_ptr.to_ref() };
@@ -291,36 +291,46 @@ impl ThreadStorageSlots {
         new_slot_value: ThreadStorageSlotValue,
         write_guard: crate::loom::std::sync::MutexGuard<'_, WriteLockMarker>,
     ) -> ThreadStorageSlotId {
-        let cur_data_ptr = self.cur_data.get_mut_ptr();
+        let (cur_data_raw_ptr, len, capacity) = {
+            let cur_data_ptr = self.cur_data.get_const_ptr();
 
-        // SAFETY: we are holding the write lock, so no one can write to this other than us.
-        let cur_data = unsafe { cur_data_ptr.to_ref() };
+            // SAFETY: we are holding the write lock, so no one can write to this other than us.
+            let cur_data = unsafe { cur_data_ptr.to_ref() };
 
-        let len = cur_data.len.load(
-            // ordering doesn't matter, we have exclusive access to this field due to the write lock
-            atomic::Ordering::Relaxed,
-        );
+            (
+                cur_data.ptr,
+                cur_data.len.load(
+                    // ordering doesn't matter, we have exclusive access to this field due to the write lock
+                    atomic::Ordering::Relaxed,
+                ),
+                cur_data.capacity,
+            )
+        };
 
         // SAFETY: this function is only called when we have an existing storage vector.
         let mut new_data: TypedVec<ThreadStorageSlotId, ThreadStorageSlotValue> =
-            unsafe { TypedVec::from_raw_parts_unchecked(cur_data.ptr, len, cur_data.capacity) };
+            unsafe { TypedVec::from_raw_parts_unchecked(cur_data_raw_ptr, len, capacity) };
 
-        if likely(len < cur_data.capacity) {
+        if likely(len < capacity) {
             // no-reallocation needed, we can push into the vec and it won't re-alloc.
             let new_slot_id = new_data
                 .try_push(new_slot_value)
                 .expect("too many concurrent threads");
 
             // update the len to the new incremented len
-            cur_data.len.store(
-                new_data.len().to_raw_index(),
-                // use release ordering to make sure that the previous write to the new slot happens before the len increment.
-                //
-                // note that we break the release-sequence of this variable here due to using a plain store, which is not a RMW operation.
-                // but, this is fine since the happens before chain is maintained through another synchronization primitive - the write
-                // lock, which synchronizes us with all previous incrementers of the len.
-                atomic::Ordering::Release,
-            );
+            {
+                let cur_data_ptr = self.cur_data.get_const_ptr();
+                let cur_data = unsafe { cur_data_ptr.to_ref() };
+                cur_data.len.store(
+                    new_data.len().to_raw_index(),
+                    // use release ordering to make sure that the previous write to the new slot happens before the len increment.
+                    //
+                    // note that we break the release-sequence of this variable here due to using a plain store, which is not a RMW operation.
+                    // but, this is fine since the happens before chain is maintained through another synchronization primitive - the write
+                    // lock, which synchronizes us with all previous incrementers of the len.
+                    atomic::Ordering::Release,
+                );
+            }
 
             // avoid dropping the data, it is still being used as the storage buffer in this case
             core::mem::forget(new_data);
@@ -384,10 +394,10 @@ impl ThreadStorageSlots {
 }
 impl Drop for ThreadStorageSlots {
     fn drop(&mut self) {
-        let cur_data_ptr = self.cur_data.get_mut_ptr();
+        let cur_data_ptr = self.cur_data.get_const_ptr();
 
         // SAFETY: we have exclusive access over `self`, so no-one can concurrently acces the data inside it.
-        let cur_data = unsafe { cur_data_ptr.to_mut_ref() };
+        let cur_data = unsafe { cur_data_ptr.to_ref() };
         if cur_data.capacity != 0 {
             let _ = unsafe {
                 TypedVec::<ThreadStorageSlotId, ThreadStorageSlotValue>::from_raw_parts_unchecked(
