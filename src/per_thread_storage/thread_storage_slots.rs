@@ -64,6 +64,9 @@ pub struct ThreadStorageSlots {
     /// it is provided as an external lock instead of wrapping the cur data directly, since the cur data is also protected from writes
     /// by writing the write lock. doing it separately allow us to access the inner data in such scenarios without having to lock this
     /// lock when it is not needed.
+    ///
+    /// we use parking lot's rwlock since it is fair. we need fairness here, otherwise the readers will starve writers forever, and threads
+    /// wanting to allocate new slots may just block forever.
     cur_data_lock: crate::loom::parking_lot::RwLock<CurDataLockMarker>,
 
     /// a lock which is used to make writers mutually exclusive, such that at any given moment, only one writer can work.
