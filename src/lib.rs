@@ -627,7 +627,7 @@ fn on_thread_park() {
     // the previously mentioned problem.
     //
     // furthermore, skipping the current thread doesn't create any new problems. if there are other tasks that were last polled on the current
-    // thread and are waiting for this notify, they are clearly not waiting for this thread to park. they may actaully be waiting for this thread
+    // thread and are waiting for this notify, they are clearly not waiting for this thread to park. they may actually be waiting for this thread
     // to see their new epoch id, but that is handled through the after poll hook, not the park hook.
     // basically, there's no reason for a task to wait for a notification telling it that the thread that last polled it parks. it will not advance
     // their grace period in any meaningful way.
