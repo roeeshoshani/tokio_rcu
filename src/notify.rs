@@ -8,7 +8,10 @@ use std::{
 
 use crate::loom::{
     CellDataNonNullPtr, UnsafeCell, fn_const_if_not_loom,
-    std::sync::atomic::{self, AtomicUsize},
+    std::{
+        sync::atomic::{self, AtomicUsize},
+        thread::{self, ThreadId},
+    },
 };
 
 /// a synchronization data structure used to pass notifications between different tasks.
@@ -58,6 +61,20 @@ impl Notify {
     ///
     /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
     pub fn notify(&self) {
+        self.notify_impl(false);
+    }
+
+    /// notifies all currently registered waiters, other than the waiters which were registered by the current thread.
+    ///
+    /// this is used when the state change being notified about can't possibly be of any interest to the current thread itself.
+    /// see [`on_thread_park`](crate::on_thread_park) for the specific case where this is needed, and `Slot::thread_id` for more info.
+    ///
+    /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
+    pub fn notify_except_current_thread(&self) {
+        self.notify_impl(true);
+    }
+
+    fn notify_impl(&self, skip_waiters_of_current_thread: bool) {
         self.num_wakeups.fetch_add(
             1,
             // need release ordering for the memory ordering guarantees chosen for this data structure.
@@ -65,6 +82,9 @@ impl Notify {
             // use an acquire ordering here (for more info on release-sequences, see c++ memory model).
             atomic::Ordering::Release,
         );
+
+        // only fetch the current thread id if we actually need it, since this is not free under loom.
+        let cur_thread_id = skip_waiters_of_current_thread.then(|| thread::current().id());
 
         let _guard = self.lock.lock().unwrap();
 
@@ -77,38 +97,60 @@ impl Notify {
         // this may seem like a violation of rust's aliasing rules, but since `Slot` is `!Unpin`, we are allowed to create aliasing references
         // to it in this manner.
         unsafe {
-            let mut waiters_list_head_ptr = self.waiters_list_head.get_mut_ptr();
-            let waiters_list_head = waiters_list_head_ptr.as_mut_ref();
+            // the link (the `next` pointer of a slot, or the head pointer of the list) which currently points at the slot we are looking at.
+            // for the first slot in the list this is the head pointer of the list, and for any other slot this is the `next` pointer of the slot
+            // preceding it.
+            let mut link_to_cur_slot = self.waiters_list_head.get_mut_ptr();
 
-            while let Some(cur_head) = *waiters_list_head {
-                let slot = cur_head.as_ref();
+            while let Some(cur_slot_ptr) = link_to_cur_slot.read() {
+                let cur_slot = cur_slot_ptr.as_ref();
 
-                // first remove the current slot from the list.
-                // we do this so that if its wake callback panics, we leave the list in a reasonable state.
+                // the link of the slot we are looking at, and the slot it currently points at (if any).
+                let cur_link = cur_slot.next.get_mut_ptr();
+                let next_slot_ptr = cur_link.read();
 
-                // grab the next slot in the list.
-                let next_ptr_opt = slot.next.get_const_ptr().read();
+                // avoid having the current thread wake itself up.
+                // this protection helps deal with a quirk in the rcu implementation, where we notify some notification object whenever a thread
+                // parks itself, but without this protection, as soon as a thread would start waiting for a notification and park itself, the park
+                // operation would wake himself up due to login in our on park hook, making the thread unable to actually wait for a notification,
+                // instead being stuck in a constant loop of trying to park and then immediately waking up.
+                let skip =
+                    cur_thread_id.is_some_and(|id| cur_slot.thread_id.get_const_ptr().read() == id);
+                if !skip {
+                    // in this case, we want to remove this slot and wake its waker.
 
-                // make the next slot the new head of the list, removing ourselves from it
-                *waiters_list_head = next_ptr_opt;
-                if let Some(next_ptr) = next_ptr_opt {
-                    let next_slot = next_ptr.as_ref();
+                    // first remove the current slot from the list, so that the link which used to point at it now points at the next slot.
+                    // we do this before waking it up so that if its wake callback panics, we leave the list in a reasonable state.
 
-                    // set the pprev of the next slot to `None`, indicating to it that it is the first slot in the list.
-                    next_slot.pprev.get_mut_ptr().write(None);
-                }
+                    link_to_cur_slot.write(next_slot_ptr);
+                    if let Some(next_slot_ptr) = next_slot_ptr {
+                        let next_slot = next_slot_ptr.as_ref();
 
-                // tell the node that he is no longer in the list.
-                // this is important for when the future containing the slot is dropped, so that it knows whether to try to remove
-                // itself from the list or not.
-                slot.is_in_list.get_mut_ptr().write(false);
+                        // the next slot takes the place of the slot we just removed, so it must also take its pprev.
+                        // this is either `None` if the removed slot was the head of the list (in which case the next slot is now the head), or a
+                        // pointer to the `next` pointer of the slot preceding the removed slot (which may be a slot we decided not to remove).
+                        next_slot
+                            .pprev
+                            .get_mut_ptr()
+                            .write(cur_slot.pprev.get_mut_ptr().replace(None));
+                    }
 
-                let waker_opt = slot.waker.get_mut_ptr().replace(None);
-                if let Some(waker) = waker_opt {
-                    // if this panics, nothing REALLY bad happens.
-                    // the list is currently in a valid state, and this node is no longer part of it.
-                    // but, the lock is poisoned, so whoever tries to lock it next will panic.
-                    waker.wake();
+                    // tell the node that he is no longer in the list.
+                    // this is important for when the future containing the slot is dropped, so that it knows whether to try to remove
+                    // itself from the list or not.
+                    cur_slot.is_in_list.get_mut_ptr().write(false);
+
+                    let waker_opt = cur_slot.waker.get_mut_ptr().replace(None);
+                    if let Some(waker) = waker_opt {
+                        // if this panics, nothing REALLY bad happens.
+                        // the list is currently in a valid state, and this node is no longer part of it.
+                        // but, the lock is poisoned, so whoever tries to lock it next will panic.
+                        waker.wake();
+                    }
+                } else {
+                    // the slot belongs to the current thread, so we leave it in the list and don't wake it up.
+                    // this means the slot after it is now pointed at by the current slot's link, so we continue from there.
+                    link_to_cur_slot = cur_link;
                 }
             }
         }
@@ -133,6 +175,14 @@ struct Slot {
 
     is_in_list: UnsafeCell<bool>,
 
+    /// the thread id of this waiter. updated whenever the [`Notified`] instance is polled.
+    /// this is used to prevent a thread from waking himself up.
+    ///
+    /// this is an implementation quirk, but it is quite important. the rcu book-keeping logic notifies the global notification object whenever
+    /// a thread parks. but, when a thread waits for a notification, he immediately parks, which then immediately notifies the exact notification
+    /// that he just started waiting on. to prevent this from immediately waking that thread up, we make sure that a thread can't wake itself up.
+    thread_id: UnsafeCell<ThreadId>,
+
     // this makes sure that the compiler doesn't emit the llvm `noalias` attribute for `&mut Self` values.
     // without this, putting the future into the intrusive linked list is inherently UB, since calling poll on `Notified` requires
     // constructing a `&mut Notified`, and while that `&mut Notified` exists, someone may be iterating over the list and modifying
@@ -148,6 +198,7 @@ impl Slot {
             waker: UnsafeCell::new(None),
             next: UnsafeCell::new(None),
             is_in_list: UnsafeCell::new(false),
+            thread_id: UnsafeCell::new(thread::current().id()),
             _phantom: PhantomPinned,
         }
     }
@@ -199,6 +250,12 @@ impl<'a> Future for Notified<'a> {
 
             // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
             unsafe {
+                // update the current thread id of this waiter
+                self.slot
+                    .thread_id
+                    .get_mut_ptr()
+                    .write(thread::current().id());
+
                 let is_in_list = self.slot.is_in_list.get_const_ptr().read();
 
                 // insert us into the waker list, or update our waker if we're already in the list

@@ -162,6 +162,26 @@ impl<T> CellDataMutPtr<T> {
         }
     }
 }
+impl<T: Copy> CellDataMutPtr<T> {
+    /// reads the data pointed at by this pointer and copies its contents.
+    ///
+    /// # Safety
+    ///
+    /// pointer must be valid for reading.
+    ///
+    /// this basically has the same safety requirements as doing `*ptr` on this pointer, if it were a regular pointer.
+    #[inline(always)]
+    pub unsafe fn read(&self) -> T {
+        #[cfg(not(loom))]
+        unsafe {
+            *self.raw
+        }
+        #[cfg(loom)]
+        unsafe {
+            self.raw.with(|ptr| *ptr)
+        }
+    }
+}
 
 /// a loom/std abstraction over a const pointer (`*const T`) to the data contained inside a cell.
 pub struct CellDataConstPtr<T> {
@@ -210,6 +230,7 @@ impl<T: Copy> CellDataConstPtr<T> {
         }
     }
 }
+
 /// makes the given function constant only when not running under loom.
 ///
 /// this is needed since several types in this crate have a `const` constructor which is required for the statics which hold them,

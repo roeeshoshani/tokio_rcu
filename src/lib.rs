@@ -616,7 +616,11 @@ fn on_thread_park() {
     // so we will never see it.
     // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected
     // pointers.
-    THREAD_EPOCH_UPDATED_NOTIFY.notify();
+    //
+    // note that we specifically use `notify_except_current_thread` to avoid waking up a waiter on this same thread:
+    // the task currently running on this thread is the one that is parking, so waking it would immediately defeat
+    // the park and cause an infinite spin.
+    THREAD_EPOCH_UPDATED_NOTIFY.notify_except_current_thread();
 }
 
 fn on_thread_unpark() {
