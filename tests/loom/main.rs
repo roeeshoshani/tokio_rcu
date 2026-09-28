@@ -47,6 +47,7 @@ fn loom_thread_spawn<F: FnOnce() + 'static>(f: F) -> loom::thread::JoinHandle<()
     loom::thread::spawn(move || with_thread_stop(f))
 }
 
+/// a basic test where one thread reads the value and one thread swaps it.
 #[test]
 fn basic_read_write() {
     #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
@@ -99,6 +100,7 @@ fn basic_read_write() {
     );
 }
 
+/// a test which makes sure that using the guard returned from [`RcuBox::read`] across an await point causes UAF in a controlled and expected manner.
 #[test]
 fn read_and_use_after_quiescent_state_causes_uaf() {
     #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
