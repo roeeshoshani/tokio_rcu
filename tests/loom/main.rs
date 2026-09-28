@@ -4,8 +4,9 @@ use std::{pin::pin, task::Poll};
 
 use tokio_rcu::rcu_box::RcuBox;
 
-use crate::uaf_detector::UafDetector;
+use crate::{loom_waker::LoomWaker, uaf_detector::UafDetector};
 
+mod loom_waker;
 mod uaf_detector;
 
 fn busy_block_on_future<F, R>(future: F) -> R
@@ -13,7 +14,9 @@ where
     F: Future<Output = R>,
 {
     let mut pinned = pin!(future);
-    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    let loom_waker = LoomWaker::new();
+    let waker = loom_waker.clone().into();
+    let mut context = std::task::Context::from_waker(&waker);
     loop {
         let res_opt = with_before_after_poll(|| {
             if let Poll::Ready(res) = pinned.as_mut().poll(&mut context) {
@@ -27,7 +30,7 @@ where
             return res;
         }
 
-        loom::thread::yield_now();
+        loom_waker.wait();
     }
 }
 
