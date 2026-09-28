@@ -631,6 +631,12 @@ fn on_thread_park() {
     // to see their new epoch id, but that is handled through the after poll hook, not the park hook.
     // basically, there's no reason for a task to wait for a notification telling it that the thread that last polled it parks. it will not advance
     // their grace period in any meaningful way.
+    // the only scenario where this may be relevant is where a task was last polled on thread A, and the last thread it still needs to wait for is
+    // thread A, and then that task gets migrated to thread B. in that case, the fact that A parked will make that task finish its wait.
+    // but, this case is already handled by the regular quiescent state hooks. in the aforementioned scenario, once the task is finished being polled
+    // on thread A, the `on_after_task_poll` hook on thread A will see a new epoch id, and will thus perform the notify operation.
+    //
+    // so, having the thread wake itself up when it parks is unnecessary in every possible scenario.
     THREAD_EPOCH_UPDATED_NOTIFY.notify_except_current_thread();
 }
 
