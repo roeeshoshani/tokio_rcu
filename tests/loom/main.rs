@@ -30,7 +30,7 @@ where
             return res;
         }
 
-        loom_waker.wait();
+        loom_waker.wait_with_hooks();
     }
 }
 
