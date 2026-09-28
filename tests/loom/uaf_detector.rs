@@ -119,11 +119,6 @@ impl UafDetector {
         GLOBAL_ALLOCATOR.alloc_uaf_detector(id)
     }
 
-    /// checks if this UAF detector had already been freed, in which case this is a UAF access.
-    pub fn was_freed(&self) -> bool {
-        self.was_freed
-    }
-
     /// returns the id of this UAF detector, or `None` if this UAF detector has already been freed.
     pub fn try_id(&self) -> Option<usize> {
         if self.was_freed { None } else { Some(self.id) }
