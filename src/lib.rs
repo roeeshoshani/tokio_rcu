@@ -617,9 +617,20 @@ fn on_thread_park() {
     // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected
     // pointers.
     //
-    // note that we specifically use `notify_except_current_thread` to avoid waking up a waiter on this same thread:
-    // the task currently running on this thread is the one that is parking, so waking it would immediately defeat
-    // the park and cause an infinite spin.
+    // note that we specifically use `notify_except_current_thread` to avoid having a thread wake itself up immediately as it tries to park.
+    // consider the scenario where a thread starts waiting for a notification on the `THREAD_EPOCH_UPDATED_NOTIFY` object. the thread starts
+    // waiting and parks itself. when it parks, this park hook is called, and immediately calls notify on the same `Notify` object that this
+    // thread itself just started waiting for. this causes the thread itself to wake itself up as soon as it tried to park, preventing the thread
+    // from properly parking and waiting for a notification.
+    //
+    // so, we use a version of the notify which doesn't wake waiter futures that were last polled on the current thread. this clearly prevents
+    // the previously mentioned problem.
+    //
+    // furthermore, skipping the current thread doesn't create any new problems. if there are other tasks that were last polled on the current
+    // thread and are waiting for this notify, they are clearly not waiting for this thread to park. they may actaully be waiting for this thread
+    // to see their new epoch id, but that is handled through the unpark or after pool hook, and not the park hook.
+    // basically, there's no reason for a task to wait for a notification telling it that the thread that last polled it parks. it will not advance
+    // their grace period in any meaningful way.
     THREAD_EPOCH_UPDATED_NOTIFY.notify_except_current_thread();
 }
 
