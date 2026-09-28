@@ -440,3 +440,14 @@ fn synchronize_rcu_while_blocking_thread_exists() {
         blocking_task.await.unwrap();
     })
 }
+
+/// a test which makes sure that synchronize rcu works fine even if only one thread exists.
+/// this is interesting since the thread needs to wait for itself to pass through a quiescent state.
+/// this test makes sure that the rcu logic is able to properly track this thread alone, and does not implicitly rely on wake up events sent from
+/// other runtime threads to make the logic work properly.
+#[test]
+fn synchronize_rcu_single_thread() {
+    rcu_block_on(async {
+        synchronize_rcu().await;
+    })
+}
