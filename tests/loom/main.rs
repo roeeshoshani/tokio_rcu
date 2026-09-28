@@ -75,7 +75,7 @@ fn basic_read_write() {
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
-            let worker = thread_spawn_with_hooks({
+            thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
@@ -97,8 +97,6 @@ fn basic_read_write() {
                     });
                 });
             }
-
-            worker.join().unwrap();
         }
     });
 
@@ -129,7 +127,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
-            let worker = thread_spawn_with_hooks({
+            thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
@@ -155,8 +153,6 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                     }
                 }
             }
-
-            worker.join().unwrap();
         }
     });
 
