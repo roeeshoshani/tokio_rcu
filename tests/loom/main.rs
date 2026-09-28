@@ -54,9 +54,12 @@ fn thread_spawn_with_hooks<R: 'static, F: FnOnce() -> R + 'static>(
     loom::thread::spawn(move || with_thread_start_stop(f))
 }
 
-/// a basic test where one thread reads the value and one thread swaps it.
+/// a test where one thread reads the value and one thread swaps it.
+///
+/// this test exercises most of the main flows of the rcu book-keeping logic.
+/// it covers both the just-waking thread case, the just-starting thread case, and the already-running thread case.
 #[test]
-fn basic_read_write() {
+fn read_and_write() {
     #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
     struct Results {
         saw_id0: bool,
@@ -83,17 +86,46 @@ fn basic_read_write() {
                 let state = state.clone();
                 let results = results.clone();
                 move || {
+                    let first_seen_id = with_before_after_poll(|| {
+                        state.with(|guard| {
+                            let id = guard.id();
+                            match id {
+                                0 => {
+                                    results.lock().unwrap().saw_id0 = true;
+                                }
+                                1 => {
+                                    results.lock().unwrap().saw_id1 = true;
+                                }
+                                id => panic!("unexpected guard id: {id}"),
+                            };
+                            id
+                        })
+                    });
+
+                    // emulate this thread going to sleep and waking up from it.
+                    // this is used to exercise the just-waking thread path.
+                    tokio_rcu::loom_tests_api::on_thread_park();
+                    tokio_rcu::loom_tests_api::on_thread_unpark();
+
+                    // re-poll after waking from sleep.
                     with_before_after_poll(|| {
-                        state.with(|guard| match guard.id() {
-                            0 => {
-                                results.lock().unwrap().saw_id0 = true;
+                        state.with(|guard| {
+                            let id = guard.id();
+
+                            // make sure that we see a later value than the first value.
+                            assert!(id >= first_seen_id);
+
+                            match id {
+                                0 => {
+                                    results.lock().unwrap().saw_id0 = true;
+                                }
+                                1 => {
+                                    results.lock().unwrap().saw_id1 = true;
+                                }
+                                id => panic!("unexpected guard id: {id}"),
                             }
-                            1 => {
-                                results.lock().unwrap().saw_id1 = true;
-                            }
-                            id => panic!("unexpected guard id: {id}"),
                         });
-                    })
+                    });
                 }
             });
 
