@@ -38,13 +38,17 @@ fn with_before_after_poll<R, F: FnOnce() -> R>(f: F) -> R {
     res
 }
 
-fn with_thread_stop<R, F: FnOnce() -> R>(f: F) -> R {
+fn with_thread_start_stop<R, F: FnOnce() -> R>(f: F) -> R {
+    // note that there isn't really thread start hook in tokio rcu, so we don't need to do anything before calling the function.
     let res = f();
     tokio_rcu::loom_tests_api::on_thread_stop();
     res
 }
-fn loom_thread_spawn<F: FnOnce() + 'static>(f: F) -> loom::thread::JoinHandle<()> {
-    loom::thread::spawn(move || with_thread_stop(f))
+
+fn thread_spawn_with_hooks<R: 'static, F: FnOnce() -> R + 'static>(
+    f: F,
+) -> loom::thread::JoinHandle<R> {
+    loom::thread::spawn(move || with_thread_start_stop(f))
 }
 
 /// a basic test where one thread reads the value and one thread swaps it.
@@ -64,7 +68,7 @@ fn basic_read_write() {
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
-            let worker1 = loom_thread_spawn({
+            let worker1 = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
@@ -73,7 +77,7 @@ fn basic_read_write() {
             });
 
             // worker 2
-            with_thread_stop(|| {
+            with_thread_start_stop(|| {
                 with_before_after_poll(|| {
                     state.with(|guard| match guard.id() {
                         0 => {
@@ -118,7 +122,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
-            let worker1 = loom_thread_spawn({
+            let worker1 = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
@@ -127,7 +131,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
             });
 
             // worker 2
-            with_thread_stop(|| {
+            with_thread_start_stop(|| {
                 let guard = with_before_after_poll(|| unsafe { state.read() });
                 match guard.try_id() {
                     Some(id) => match id {
