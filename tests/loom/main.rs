@@ -54,10 +54,6 @@ fn thread_spawn_with_hooks<R: 'static, F: FnOnce() -> R + 'static>(
     loom::thread::spawn(move || with_thread_start_stop(f))
 }
 
-fn loom_model_with_hooks<F: Fn() + Send + Sync + 'static>(f: F) {
-    loom::model(move || with_thread_start_stop(|| f()));
-}
-
 /// a basic test where one thread reads the value and one thread swaps it.
 #[test]
 fn basic_read_write() {
@@ -67,7 +63,7 @@ fn basic_read_write() {
         saw_id1: bool,
     }
     let results = std::sync::Arc::new(std::sync::Mutex::new(Results::default()));
-    loom_model_with_hooks({
+    loom::model({
         let results = results.clone();
         move || {
             let uaf_detector_0 = UafDetector::new(0);
@@ -75,7 +71,7 @@ fn basic_read_write() {
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
-            let worker = thread_spawn_with_hooks({
+            let writer = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
@@ -83,25 +79,26 @@ fn basic_read_write() {
                 }
             });
 
-            // main thread logic
-            {
-                with_before_after_poll(|| {
-                    state.with(|guard| match guard.id() {
-                        0 => {
-                            results.lock().unwrap().saw_id0 = true;
-                        }
-                        1 => {
-                            results.lock().unwrap().saw_id1 = true;
-                        }
-                        id => panic!("unexpected guard id: {id}"),
-                    });
-                });
-            }
+            let reader = thread_spawn_with_hooks({
+                let state = state.clone();
+                let results = results.clone();
+                move || {
+                    with_before_after_poll(|| {
+                        state.with(|guard| match guard.id() {
+                            0 => {
+                                results.lock().unwrap().saw_id0 = true;
+                            }
+                            1 => {
+                                results.lock().unwrap().saw_id1 = true;
+                            }
+                            id => panic!("unexpected guard id: {id}"),
+                        });
+                    })
+                }
+            });
 
-            tokio_rcu::loom_tests_api::on_thread_park();
-            let joined = worker.join();
-            tokio_rcu::loom_tests_api::on_thread_unpark();
-            joined.unwrap();
+            writer.join().unwrap();
+            reader.join().unwrap();
         }
     });
 
@@ -124,7 +121,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
         saw_uaf: bool,
     }
     let results = std::sync::Arc::new(std::sync::Mutex::new(Results::default()));
-    loom_model_with_hooks({
+    loom::model({
         let results = results.clone();
         move || {
             let uaf_detector_0 = UafDetector::new(0);
@@ -132,7 +129,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
 
             let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
 
-            let worker = thread_spawn_with_hooks({
+            let writer = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
                     let prev = busy_block_on_future(state.swap(uaf_detector_1));
@@ -140,29 +137,30 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                 }
             });
 
-            // main thread logic
-            {
-                let guard = with_before_after_poll(|| unsafe { state.read() });
-                match guard.try_id() {
-                    Some(id) => match id {
-                        0 => {
-                            results.lock().unwrap().saw_id0 = true;
+            let reader = thread_spawn_with_hooks({
+                let state = state.clone();
+                let results = results.clone();
+                move || {
+                    let guard = with_before_after_poll(|| unsafe { state.read() });
+                    match guard.try_id() {
+                        Some(id) => match id {
+                            0 => {
+                                results.lock().unwrap().saw_id0 = true;
+                            }
+                            1 => {
+                                results.lock().unwrap().saw_id1 = true;
+                            }
+                            id => panic!("unexpected guard id: {id:?}"),
+                        },
+                        None => {
+                            results.lock().unwrap().saw_uaf = true;
                         }
-                        1 => {
-                            results.lock().unwrap().saw_id1 = true;
-                        }
-                        id => panic!("unexpected guard id: {id:?}"),
-                    },
-                    None => {
-                        results.lock().unwrap().saw_uaf = true;
                     }
                 }
-            }
+            });
 
-            tokio_rcu::loom_tests_api::on_thread_park();
-            let joined = worker.join();
-            tokio_rcu::loom_tests_api::on_thread_unpark();
-            joined.unwrap();
+            writer.join().unwrap();
+            reader.join().unwrap();
         }
     });
 
