@@ -38,6 +38,7 @@ harness = false
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
-[profile.release]
+[profile.profiling]
+inherits = "release"
 debug = true
 strip = false
