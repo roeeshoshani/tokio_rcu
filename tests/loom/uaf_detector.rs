@@ -11,16 +11,41 @@ use std::{
 pub struct UafDetectorKey(u64);
 
 struct UafDetectorAllocs {
+    realloc: Vec<Box<UafDetector>>,
     leaked: Vec<Box<UafDetector>>,
 }
 
+struct ThreadReallocPool {
+    slots: Vec<Box<UafDetector>>,
+}
+impl ThreadReallocPool {
+    pub const fn new() -> Self {
+        Self { slots: Vec::new() }
+    }
+}
+impl Drop for ThreadReallocPool {
+    fn drop(&mut self) {
+        // push all slots into the global realloc pool
+        if !self.slots.is_empty() {
+            {
+                let mut uaf_detector_allocs = GLOBAL_ALLOCATOR.uaf_detector_allocs.lock();
+                uaf_detector_allocs.realloc.append(&mut self.slots);
+            }
+            GLOBAL_ALLOCATOR
+                .does_realloc_pool_contain_items
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+    }
+}
+
 thread_local! {
-    static REALLOC_POOL: RefCell<Vec<Box<UafDetector>>> = RefCell::new(Vec::new());
+    static REALLOC_POOL: RefCell<ThreadReallocPool> = RefCell::new(ThreadReallocPool::new());
 }
 
 struct UafDetectorSupportingAllocator {
     // can't use std::mutex as it may allocate.
     uaf_detector_allocs: parking_lot::Mutex<UafDetectorAllocs>,
+    does_realloc_pool_contain_items: std::sync::atomic::AtomicBool,
 }
 unsafe impl Sync for UafDetectorSupportingAllocator {}
 impl UafDetectorSupportingAllocator {
@@ -34,12 +59,46 @@ impl UafDetectorSupportingAllocator {
 
     const fn new() -> Self {
         Self {
-            uaf_detector_allocs: parking_lot::Mutex::new(UafDetectorAllocs { leaked: Vec::new() }),
+            uaf_detector_allocs: parking_lot::Mutex::new(UafDetectorAllocs {
+                realloc: Vec::new(),
+                leaked: Vec::new(),
+            }),
+            does_realloc_pool_contain_items: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
     fn alloc_uaf_detector(&self, id: usize) -> (Box<UafDetector>, UafDetectorKey) {
-        let realloc_slot = REALLOC_POOL.with(|realloc_pool| realloc_pool.borrow_mut().pop());
+        let realloc_slot = REALLOC_POOL.with(|realloc_pool| {
+            let mut realloc_pool = realloc_pool.borrow_mut();
+            match realloc_pool.slots.pop() {
+                Some(slot) => Some(slot),
+                None => {
+                    // try grabbing from the global re-alloc pool
+                    if self
+                        .does_realloc_pool_contain_items
+                        .load(std::sync::atomic::Ordering::Acquire)
+                    {
+                        // the global realloc pool MAY have some items, grab them
+                        let mut uaf_detector_allocs = self.uaf_detector_allocs.lock();
+                        if !uaf_detector_allocs.realloc.is_empty() {
+                            // the global realloc pool indeed has some slots, use one for this allocation, and move
+                            // the rest to the local pool
+                            let reused_slot = uaf_detector_allocs.realloc.pop();
+                            realloc_pool.slots.append(&mut uaf_detector_allocs.realloc);
+
+                            reused_slot
+                        } else {
+                            // the global pool is empty
+                            None
+                        }
+                    } else {
+                        // nothing in the global re-alloc pool as well
+                        None
+                    }
+                }
+            }
+        });
+
         match realloc_slot {
             Some(mut existing_allocation) => {
                 *existing_allocation = UafDetector::new_noalloc(id);
@@ -89,7 +148,8 @@ impl UafDetectorSupportingAllocator {
             uaf_detector_allocs.leaked.push(reconstructed_box);
         } else {
             // can re-alloc this slot
-            REALLOC_POOL.with(|realloc_poll| realloc_poll.borrow_mut().push(reconstructed_box))
+            REALLOC_POOL
+                .with(|realloc_poll| realloc_poll.borrow_mut().slots.push(reconstructed_box))
         }
     }
 }
