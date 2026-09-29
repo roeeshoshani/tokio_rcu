@@ -102,18 +102,9 @@ impl UafDetectorSupportingAllocator {
         match realloc_slot {
             Some(mut existing_allocation) => {
                 *existing_allocation = UafDetector::new_noalloc(id);
-
-                let prefix_ptr =
-                    unsafe { Self::uaf_detector_get_prefix_ptr(&mut existing_allocation) };
-                let old_prefix = unsafe { prefix_ptr.read() };
-                debug_assert!(old_prefix & (1 << 63) != 0);
-                debug_assert!(old_prefix != u64::MAX);
-
-                let new_prefix = old_prefix + 1;
-
-                unsafe { prefix_ptr.write(new_prefix) };
-
-                (existing_allocation, UafDetectorKey(new_prefix))
+                let prefix =
+                    unsafe { Self::uaf_detector_get_prefix_ptr(&mut existing_allocation).read() };
+                (existing_allocation, UafDetectorKey(prefix))
             }
             None => self.alloc_uaf_detector_no_realloc(id),
         }
@@ -140,13 +131,16 @@ impl UafDetectorSupportingAllocator {
         }
     }
 
-    fn dealloc_uaf_detector(&self, ptr: *mut u8, prefix: u64) {
+    fn dealloc_uaf_detector(&self, ptr: *mut u8, prefix_ptr: *mut u64, prefix: u64) {
         let reconstructed_box = unsafe { Box::from_raw(ptr.cast::<UafDetector>()) };
         if prefix == u64::MAX {
             // can't re-alloc this slot anymore, it will lead to re-use of keys, so leak it forever.
             let mut uaf_detector_allocs = self.uaf_detector_allocs.lock();
             uaf_detector_allocs.leaked.push(reconstructed_box);
         } else {
+            // increment the prefix, so that this slot can see that it was freed.
+            unsafe { prefix_ptr.write(prefix + 1) };
+
             // can re-alloc this slot
             REALLOC_POOL
                 .with(|realloc_poll| realloc_poll.borrow_mut().slots.push(reconstructed_box))
@@ -164,11 +158,13 @@ unsafe impl GlobalAlloc for UafDetectorSupportingAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         let (alloc_layout, data_off) = Self::calc_alloc_layout(layout).unwrap();
         let alloc_ptr = unsafe { ptr.byte_sub(data_off) };
+
+        let prefix_ptr = alloc_ptr.cast::<u64>();
         let prefix = unsafe { alloc_ptr.cast::<u64>().read() };
         if (prefix & (1u64 << 63)) != 0 {
             // this is uaf detector allocation
             debug_assert_eq!(layout, Layout::new::<UafDetector>());
-            self.dealloc_uaf_detector(ptr, prefix);
+            self.dealloc_uaf_detector(ptr, prefix_ptr, prefix);
         } else {
             // regular non uaf-detector allocation
             unsafe { std::alloc::System.dealloc(alloc_ptr, alloc_layout) }
