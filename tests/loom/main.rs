@@ -207,3 +207,95 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
         }
     );
 }
+
+/// a test where one thread reads the value and one thread swaps it, and then the writer swaps the value, he immediately
+/// reaches the reset epoch id and starts performing a reset operation.
+///
+/// this test covers both the just-waking thread case, the just-starting thread case, and the already-running thread case,
+/// all during a reset operation.
+#[test]
+fn read_and_write_with_reset() {
+    #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
+    struct Results {
+        saw_id0: bool,
+        saw_id1: bool,
+    }
+    let results = std::sync::Arc::new(parking_lot::Mutex::new(Results::default()));
+    loom::model({
+        let results = results.clone();
+        move || {
+            tokio_rcu::loom_tests_api::epoch_id_set(
+                tokio_rcu::loom_tests_api::EPOCH_ID_MAX - 2,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+
+            let (uaf_detector0, uaf_detector0_key) = UafDetector::new(0);
+            let uaf_detector0_ptr = Box::as_ptr(&uaf_detector0);
+
+            let (uaf_detector1, uaf_detector1_key) = UafDetector::new(1);
+            let uaf_detector1_ptr = Box::as_ptr(&uaf_detector1);
+
+            let state = loom::sync::Arc::new(RcuBox::new(uaf_detector0));
+
+            let writer = thread_spawn_with_hooks({
+                let state = state.clone();
+                move || {
+                    let prev = busy_block_on_future(state.swap(uaf_detector1));
+                    assert_eq!(prev.id(uaf_detector0_key), 0);
+                }
+            });
+
+            let reader = thread_spawn_with_hooks({
+                let state = state.clone();
+                let results = results.clone();
+                move || {
+                    let check_guard_logic = |guard: &UafDetector| {
+                        let guard_ptr = guard as *const UafDetector;
+                        if guard_ptr == uaf_detector0_ptr {
+                            let id = guard.id(uaf_detector0_key);
+                            assert_eq!(id, 0);
+                            results.lock().saw_id0 = true;
+                            id
+                        } else if guard_ptr == uaf_detector1_ptr {
+                            let id = guard.id(uaf_detector1_key);
+                            assert_eq!(id, 1);
+                            results.lock().saw_id1 = true;
+                            id
+                        } else {
+                            panic!("unexpected ptr");
+                        }
+                    };
+
+                    let first_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
+
+                    // emulate this thread going to sleep and waking up from it.
+                    // this is used to exercise the just-waking thread path.
+                    tokio_rcu::loom_tests_api::on_thread_park();
+                    tokio_rcu::loom_tests_api::on_thread_unpark();
+
+                    // re-poll after waking from sleep.
+                    let second_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
+
+                    // the id we see later must be greater than or equal the id we saw first, otherwise we see
+                    // the writes happening in reverse, which should never happen.
+                    assert!(second_seen_id >= first_seen_id);
+                }
+            });
+
+            writer.join().unwrap();
+            reader.join().unwrap();
+
+            let final_epoch_id =
+                tokio_rcu::loom_tests_api::epoch_id_get(std::sync::atomic::Ordering::Relaxed);
+            assert_eq!(final_epoch_id, tokio_rcu::loom_tests_api::EPOCH_ID_MIN + 2)
+        }
+    });
+
+    assert_eq!(
+        *results.lock(),
+        Results {
+            saw_id0: true,
+            saw_id1: true,
+        }
+    );
+}

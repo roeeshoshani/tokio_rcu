@@ -944,6 +944,8 @@ impl<F: Future> Future for RcuRootFuture<F> {
 /// do not use this unless you know what you are doing.
 #[cfg(loom)]
 pub mod loom_tests_api {
+    pub use crate::epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId};
+
     pub fn on_before_task_poll() {
         crate::on_before_task_poll();
     }
@@ -958,5 +960,11 @@ pub mod loom_tests_api {
     }
     pub fn on_after_task_poll() {
         crate::on_after_task_poll()
+    }
+    pub fn epoch_id_set(new_value: EpochId, ordering: std::sync::atomic::Ordering) {
+        crate::epoch::epoch_id_set(new_value, ordering);
+    }
+    pub fn epoch_id_get(ordering: std::sync::atomic::Ordering) -> EpochId {
+        crate::epoch::epoch_id_get(ordering)
     }
 }
