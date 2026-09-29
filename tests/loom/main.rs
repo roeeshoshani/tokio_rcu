@@ -65,20 +65,23 @@ fn read_and_write() {
         saw_id0: bool,
         saw_id1: bool,
     }
-    let results = std::sync::Arc::new(std::sync::Mutex::new(Results::default()));
+    let results = std::sync::Arc::new(parking_lot::Mutex::new(Results::default()));
     loom::model({
         let results = results.clone();
         move || {
-            let uaf_detector_0 = UafDetector::new(0);
-            let uaf_detector_1 = UafDetector::new(1);
+            let (uaf_detector0, uaf_detector0_key) = UafDetector::new(0);
+            let uaf_detector0_ptr = Box::as_ptr(&uaf_detector0);
 
-            let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
+            let (uaf_detector1, uaf_detector1_key) = UafDetector::new(1);
+            let uaf_detector1_ptr = Box::as_ptr(&uaf_detector1);
+
+            let state = loom::sync::Arc::new(RcuBox::new(uaf_detector0));
 
             let writer = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
-                    let prev = busy_block_on_future(state.swap(uaf_detector_1));
-                    assert_eq!(prev.id(), 0);
+                    let prev = busy_block_on_future(state.swap(uaf_detector1));
+                    assert_eq!(prev.id(uaf_detector0_key), 0);
                 }
             });
 
@@ -86,21 +89,24 @@ fn read_and_write() {
                 let state = state.clone();
                 let results = results.clone();
                 move || {
-                    let first_seen_id = with_before_after_poll(|| {
-                        state.with(|guard| {
-                            let id = guard.id();
-                            match id {
-                                0 => {
-                                    results.lock().unwrap().saw_id0 = true;
-                                }
-                                1 => {
-                                    results.lock().unwrap().saw_id1 = true;
-                                }
-                                id => panic!("unexpected guard id: {id}"),
-                            };
+                    let check_guard_logic = |guard: &UafDetector| {
+                        let guard_ptr = guard as *const UafDetector;
+                        if guard_ptr == uaf_detector0_ptr {
+                            let id = guard.id(uaf_detector0_key);
+                            assert_eq!(id, 0);
+                            results.lock().saw_id0 = true;
                             id
-                        })
-                    });
+                        } else if guard_ptr == uaf_detector1_ptr {
+                            let id = guard.id(uaf_detector1_key);
+                            assert_eq!(id, 1);
+                            results.lock().saw_id1 = true;
+                            id
+                        } else {
+                            panic!("unexpected ptr");
+                        }
+                    };
+
+                    let first_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
 
                     // emulate this thread going to sleep and waking up from it.
                     // this is used to exercise the just-waking thread path.
@@ -108,24 +114,11 @@ fn read_and_write() {
                     tokio_rcu::loom_tests_api::on_thread_unpark();
 
                     // re-poll after waking from sleep.
-                    with_before_after_poll(|| {
-                        state.with(|guard| {
-                            let id = guard.id();
+                    let second_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
 
-                            // make sure that we see a later value than the first value.
-                            assert!(id >= first_seen_id);
-
-                            match id {
-                                0 => {
-                                    results.lock().unwrap().saw_id0 = true;
-                                }
-                                1 => {
-                                    results.lock().unwrap().saw_id1 = true;
-                                }
-                                id => panic!("unexpected guard id: {id}"),
-                            }
-                        });
-                    });
+                    // the id we see later must be greater than or equal the id we saw first, otherwise we see
+                    // the writes happening in reverse, which should never happen.
+                    assert!(second_seen_id >= first_seen_id);
                 }
             });
 
@@ -135,7 +128,7 @@ fn read_and_write() {
     });
 
     assert_eq!(
-        *results.lock().unwrap(),
+        *results.lock(),
         Results {
             saw_id0: true,
             saw_id1: true,
@@ -152,20 +145,23 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
         saw_id1: bool,
         saw_uaf: bool,
     }
-    let results = std::sync::Arc::new(std::sync::Mutex::new(Results::default()));
+    let results = std::sync::Arc::new(parking_lot::Mutex::new(Results::default()));
     loom::model({
         let results = results.clone();
         move || {
-            let uaf_detector_0 = UafDetector::new(0);
-            let uaf_detector_1 = UafDetector::new(1);
+            let (uaf_detector0, uaf_detector0_key) = UafDetector::new(0);
+            let uaf_detector0_ptr = Box::as_ptr(&uaf_detector0);
 
-            let state = loom::sync::Arc::new(RcuBox::new(uaf_detector_0));
+            let (uaf_detector1, uaf_detector1_key) = UafDetector::new(1);
+            let uaf_detector1_ptr = Box::as_ptr(&uaf_detector1);
+
+            let state = loom::sync::Arc::new(RcuBox::new(uaf_detector0));
 
             let writer = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
-                    let prev = busy_block_on_future(state.swap(uaf_detector_1));
-                    assert_eq!(prev.id(), 0);
+                    let prev = busy_block_on_future(state.swap(uaf_detector1));
+                    assert_eq!(prev.id(uaf_detector0_key), 0);
                 }
             });
 
@@ -174,19 +170,25 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                 let results = results.clone();
                 move || {
                     let guard = with_before_after_poll(|| unsafe { state.read() });
-                    match guard.try_id() {
-                        Some(id) => match id {
-                            0 => {
-                                results.lock().unwrap().saw_id0 = true;
+                    let guard_ref: &UafDetector = &*guard;
+                    let guard_ptr = guard_ref as *const UafDetector;
+                    if guard_ptr == uaf_detector0_ptr {
+                        // the first UAF detector may actually be in a UAF situation.
+                        match guard.try_id(uaf_detector0_key) {
+                            Some(id) => {
+                                assert_eq!(id, 0);
+                                results.lock().saw_id0 = true;
                             }
-                            1 => {
-                                results.lock().unwrap().saw_id1 = true;
+                            None => {
+                                results.lock().saw_uaf = true;
                             }
-                            id => panic!("unexpected guard id: {id:?}"),
-                        },
-                        None => {
-                            results.lock().unwrap().saw_uaf = true;
                         }
+                    } else if guard_ptr == uaf_detector1_ptr {
+                        // the second UAF detector can't be UAF'd.
+                        assert_eq!(guard.id(uaf_detector1_key), 1);
+                        results.lock().saw_id1 = true;
+                    } else {
+                        panic!("unexpected ptr");
                     }
                 }
             });
@@ -197,7 +199,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
     });
 
     assert_eq!(
-        *results.lock().unwrap(),
+        *results.lock(),
         Results {
             saw_id0: true,
             saw_id1: true,

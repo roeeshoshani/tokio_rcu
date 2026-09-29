@@ -1,99 +1,115 @@
-use std::{alloc::GlobalAlloc, cell::RefCell};
+use std::alloc::{GlobalAlloc, Layout, LayoutError};
+
+/// a key used to detect when a UAF detector is deallocated.
+///
+/// a key is always associated with a specific allocation. it can then be used to detect if that allocation was freed, and
+/// can even detect if it is being re-used.
+#[derive(Debug, Clone, Copy)]
+pub struct UafDetectorKey(u64);
 
 struct UafDetectorAllocs {
-    live: Vec<*mut u8>,
-    freed: Vec<*mut u8>,
-}
-
-thread_local! {
-    static DEALLOC_PASSTHROUGH_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-}
-
-fn with_dealloc_passthrough<R, F: FnOnce() -> R>(f: F) -> R {
-    DEALLOC_PASSTHROUGH_COUNT.with(|x| {
-        x.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let res = f();
-        x.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-        res
-    })
+    realloc_pool: Vec<Box<UafDetector>>,
+    leaked: Vec<Box<UafDetector>>,
 }
 
 struct UafDetectorSupportingAllocator {
     // can't use std::mutex as it may allocate.
-    uaf_detector_allocs: parking_lot::ReentrantMutex<RefCell<UafDetectorAllocs>>,
+    uaf_detector_allocs: parking_lot::Mutex<UafDetectorAllocs>,
 }
 unsafe impl Sync for UafDetectorSupportingAllocator {}
 impl UafDetectorSupportingAllocator {
+    const UAF_DETECTOR_ALLOC_DATA_OFF: usize = {
+        let Ok((_alloc_layout, data_off)) = Self::calc_alloc_layout(Layout::new::<UafDetector>())
+        else {
+            panic!();
+        };
+        data_off
+    };
+
     const fn new() -> Self {
         Self {
-            uaf_detector_allocs: parking_lot::ReentrantMutex::new(RefCell::new(
-                UafDetectorAllocs {
-                    live: Vec::new(),
-                    freed: Vec::new(),
-                },
-            )),
+            uaf_detector_allocs: parking_lot::Mutex::new(UafDetectorAllocs {
+                realloc_pool: Vec::new(),
+                leaked: Vec::new(),
+            }),
         }
     }
 
-    fn alloc_uaf_detector(&self, id: usize) -> Box<UafDetector> {
-        let mut res = Box::new(UafDetector::new_noalloc(id));
+    fn alloc_uaf_detector(&self, id: usize) -> (Box<UafDetector>, UafDetectorKey) {
+        let mut uaf_detector_allocs = self.uaf_detector_allocs.lock();
+        match uaf_detector_allocs.realloc_pool.pop() {
+            Some(mut existing_allocation) => {
+                *existing_allocation = UafDetector::new_noalloc(id);
 
-        with_dealloc_passthrough(|| {
-            let uaf_detector_allocs_guard = self.uaf_detector_allocs.lock();
-            let mut uaf_detector_allocs = uaf_detector_allocs_guard.borrow_mut();
-            uaf_detector_allocs
-                .live
-                .push(Box::as_mut_ptr(&mut res).cast::<u8>());
-        });
+                let prefix_ptr =
+                    unsafe { Self::uaf_detector_get_prefix_ptr(&mut existing_allocation) };
+                let old_prefix = unsafe { prefix_ptr.read() };
+                debug_assert!(old_prefix & (1 << 63) != 0);
+                debug_assert!(old_prefix != u64::MAX);
 
-        res
-    }
-}
-impl Drop for UafDetectorSupportingAllocator {
-    fn drop(&mut self) {
-        with_dealloc_passthrough(|| {
-            let uaf_detector_allocs_guard = self.uaf_detector_allocs.lock();
-            let mut uaf_detector_allocs = uaf_detector_allocs_guard.borrow_mut();
-            for ptr in uaf_detector_allocs.freed.drain(..) {
-                let _ = unsafe { Box::from_raw(ptr.cast::<UafDetector>()) };
+                let new_prefix = old_prefix + 1;
+
+                unsafe { prefix_ptr.write(new_prefix) };
+
+                (existing_allocation, UafDetectorKey(new_prefix))
             }
-        })
+            None => self.alloc_uaf_detector_no_realloc(id),
+        }
+    }
+
+    fn alloc_uaf_detector_no_realloc(&self, id: usize) -> (Box<UafDetector>, UafDetectorKey) {
+        let mut uaf_detector = Box::new(UafDetector::new_noalloc(id));
+        unsafe { Self::uaf_detector_get_prefix_ptr(&mut uaf_detector).write(1 << 63) };
+        (uaf_detector, UafDetectorKey(1 << 63))
+    }
+
+    const fn calc_alloc_layout(layout: Layout) -> Result<(Layout, usize), LayoutError> {
+        match std::alloc::Layout::new::<u64>().extend(layout) {
+            Ok((combined_layout, data_off)) => Ok((combined_layout, data_off)),
+            Err(err) => Err(err),
+        }
+    }
+
+    unsafe fn uaf_detector_get_prefix_ptr(uaf_detector: &mut Box<UafDetector>) -> *mut u64 {
+        unsafe {
+            Box::as_mut_ptr(uaf_detector)
+                .byte_sub(Self::UAF_DETECTOR_ALLOC_DATA_OFF)
+                .cast::<u64>()
+        }
+    }
+
+    fn dealloc_uaf_detector(&self, ptr: *mut u8, prefix: u64) {
+        let mut uaf_detector_allocs = self.uaf_detector_allocs.lock();
+        let reconstructed_box = unsafe { Box::from_raw(ptr.cast::<UafDetector>()) };
+        if prefix == u64::MAX {
+            // can't re-alloc this slot anymore, it will lead to re-use of keys, so leak it forever.
+            uaf_detector_allocs.leaked.push(reconstructed_box);
+        } else {
+            // can re-alloc this slot
+            uaf_detector_allocs.realloc_pool.push(reconstructed_box);
+        }
     }
 }
 unsafe impl GlobalAlloc for UafDetectorSupportingAllocator {
     unsafe fn alloc(&self, layout: std::alloc::Layout) -> *mut u8 {
-        unsafe { std::alloc::System.alloc(layout) }
+        let (alloc_layout, data_off) = Self::calc_alloc_layout(layout).unwrap();
+        let ptr = unsafe { std::alloc::System.alloc(alloc_layout) };
+        unsafe { ptr.cast::<u64>().write(0) };
+        unsafe { ptr.add(data_off) }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
-        let passthrough_count =
-            DEALLOC_PASSTHROUGH_COUNT.with(|x| x.load(std::sync::atomic::Ordering::SeqCst));
-        if passthrough_count == 0 {
-            let was_intercepted = with_dealloc_passthrough(|| {
-                let uaf_detector_allocs_guard = self.uaf_detector_allocs.lock();
-                let mut uaf_detector_allocs = uaf_detector_allocs_guard.borrow_mut();
-                if let Some(live_alloc_index) =
-                    uaf_detector_allocs.live.iter().position(|x| *x == ptr)
-                {
-                    // mark this allocation as freed, and move it from the live list to the free list, but don't free it completely just yet.
-                    {
-                        let uaf_detector = unsafe { &mut *ptr.cast::<UafDetector>() };
-                        uaf_detector.was_freed = true;
-                    }
-                    uaf_detector_allocs.live.swap_remove(live_alloc_index);
-                    uaf_detector_allocs.freed.push(ptr);
-                    true
-                } else {
-                    false
-                }
-            });
-
-            if was_intercepted {
-                // avoid running the real deallocation for intercepted deallocations.
-                return;
-            }
+        let (alloc_layout, data_off) = Self::calc_alloc_layout(layout).unwrap();
+        let alloc_ptr = unsafe { ptr.byte_sub(data_off) };
+        let prefix = unsafe { alloc_ptr.cast::<u64>().read() };
+        if (prefix & (1u64 << 63)) != 0 {
+            // this is uaf detector allocation
+            debug_assert_eq!(layout, Layout::new::<UafDetector>());
+            self.dealloc_uaf_detector(ptr, prefix);
+        } else {
+            // regular non uaf-detector allocation
+            unsafe { std::alloc::System.dealloc(alloc_ptr, alloc_layout) }
         }
-        unsafe { std::alloc::System.dealloc(ptr, layout) }
     }
 }
 
@@ -103,31 +119,41 @@ static GLOBAL_ALLOCATOR: UafDetectorSupportingAllocator = UafDetectorSupportingA
 /// a type used to detect use after free scenarios.
 pub struct UafDetector {
     id: usize,
-    was_freed: bool,
 }
 impl UafDetector {
     /// creates a new uaf detector value without allocating it on the heap.
     fn new_noalloc(id: usize) -> UafDetector {
-        Self {
-            id,
-            was_freed: false,
-        }
+        Self { id }
     }
 
     /// creates a new UAF detector with the given id.
-    pub fn new(id: usize) -> Box<UafDetector> {
+    pub fn new(id: usize) -> (Box<UafDetector>, UafDetectorKey) {
         GLOBAL_ALLOCATOR.alloc_uaf_detector(id)
     }
 
     /// returns the id of this UAF detector, or `None` if this UAF detector has already been freed.
-    pub fn try_id(&self) -> Option<usize> {
-        if self.was_freed { None } else { Some(self.id) }
+    pub fn try_id(&self, key: UafDetectorKey) -> Option<usize> {
+        let ptr = self as *const UafDetector;
+        let prefix: u64 = unsafe {
+            ptr.byte_sub(UafDetectorSupportingAllocator::UAF_DETECTOR_ALLOC_DATA_OFF)
+                .cast::<u64>()
+                .read()
+        };
+        if prefix == key.0 {
+            Some(self.id)
+        } else if prefix < key.0 {
+            // the key represents an old snapshot of the prefix and the prefix only grows.
+            // if the prefix is less than the key, a wrong key is used.
+            panic!("UAF detector key mismatch");
+        } else {
+            // in this situation, this UAF detector has already been freed since allocated, so this is a UAF situation.
+            None
+        }
     }
 
     /// returns the id of this UAF detector.
     /// if this UAF detector has already been freed, this function safely detects the UAF and prints a corresponding error message.
-    pub fn id(&self) -> usize {
-        self.try_id()
-            .expect("attempted to use a UAF detector object after it was freed")
+    pub fn id(&self, key: UafDetectorKey) -> usize {
+        self.try_id(key).unwrap()
     }
 }
