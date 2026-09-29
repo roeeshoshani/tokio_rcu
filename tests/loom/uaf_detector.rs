@@ -1,4 +1,7 @@
-use std::alloc::{GlobalAlloc, Layout, LayoutError};
+use std::{
+    alloc::{GlobalAlloc, Layout, LayoutError},
+    cell::RefCell,
+};
 
 /// a key used to detect when a UAF detector is deallocated.
 ///
@@ -8,8 +11,11 @@ use std::alloc::{GlobalAlloc, Layout, LayoutError};
 pub struct UafDetectorKey(u64);
 
 struct UafDetectorAllocs {
-    realloc_pool: Vec<Box<UafDetector>>,
     leaked: Vec<Box<UafDetector>>,
+}
+
+thread_local! {
+    static REALLOC_POOL: RefCell<Vec<Box<UafDetector>>> = RefCell::new(Vec::new());
 }
 
 struct UafDetectorSupportingAllocator {
@@ -28,16 +34,13 @@ impl UafDetectorSupportingAllocator {
 
     const fn new() -> Self {
         Self {
-            uaf_detector_allocs: parking_lot::Mutex::new(UafDetectorAllocs {
-                realloc_pool: Vec::new(),
-                leaked: Vec::new(),
-            }),
+            uaf_detector_allocs: parking_lot::Mutex::new(UafDetectorAllocs { leaked: Vec::new() }),
         }
     }
 
     fn alloc_uaf_detector(&self, id: usize) -> (Box<UafDetector>, UafDetectorKey) {
-        let mut uaf_detector_allocs = self.uaf_detector_allocs.lock();
-        match uaf_detector_allocs.realloc_pool.pop() {
+        let realloc_slot = REALLOC_POOL.with(|realloc_pool| realloc_pool.borrow_mut().pop());
+        match realloc_slot {
             Some(mut existing_allocation) => {
                 *existing_allocation = UafDetector::new_noalloc(id);
 
@@ -79,14 +82,14 @@ impl UafDetectorSupportingAllocator {
     }
 
     fn dealloc_uaf_detector(&self, ptr: *mut u8, prefix: u64) {
-        let mut uaf_detector_allocs = self.uaf_detector_allocs.lock();
         let reconstructed_box = unsafe { Box::from_raw(ptr.cast::<UafDetector>()) };
         if prefix == u64::MAX {
             // can't re-alloc this slot anymore, it will lead to re-use of keys, so leak it forever.
+            let mut uaf_detector_allocs = self.uaf_detector_allocs.lock();
             uaf_detector_allocs.leaked.push(reconstructed_box);
         } else {
             // can re-alloc this slot
-            uaf_detector_allocs.realloc_pool.push(reconstructed_box);
+            REALLOC_POOL.with(|realloc_poll| realloc_poll.borrow_mut().push(reconstructed_box))
         }
     }
 }
