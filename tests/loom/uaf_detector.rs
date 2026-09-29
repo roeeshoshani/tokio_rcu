@@ -213,6 +213,6 @@ impl UafDetector {
     /// returns the id of this UAF detector.
     /// if this UAF detector has already been freed, this function safely detects the UAF and prints a corresponding error message.
     pub fn id(&self, key: UafDetectorKey) -> usize {
-        self.try_id(key).unwrap()
+        self.try_id(key).expect("detected use after free")
     }
 }
