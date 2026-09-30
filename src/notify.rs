@@ -17,8 +17,20 @@ use crate::loom::{
 /// a synchronization data structure used to pass notifications between different tasks.
 /// similar in functionality to [`tokio::sync::Notify`], but a simplified version of it more tailored to the specific use in this crate.
 pub struct Notify {
+    /// the total number of wakeups ever performed.
+    /// incremented by 1 each time someone notifies this notify object.
+    /// this value safely wraps around on overflow, while still maintaining the correctness of the algorithm, except for
+    /// very extreme cases.
     num_wakeups: AtomicUsize,
+
+    /// a lock protecting the waiters list and all slots within it, including the data of all those slots.
+    ///
+    /// if a slot may or may not be in the waiters list, you must lock this lock to access it, and only if you know for sure
+    /// that it is not in the waiters list, you can safely access it without this lock.
     lock: crate::loom::std::sync::Mutex<()>,
+
+    /// the head of the list of all current waiters that registered for wake up one the notify object is notified.
+    /// the list, including all data contained in all slots contained in it, is protected by the lock.
     waiters_list_head: UnsafeCell<Next>,
 }
 impl Notify {
