@@ -722,6 +722,14 @@ fn on_thread_unpark() {
         // this is needed since we actually fetch a new epoch id here, not only set the busy flag.
         atomic::Ordering::Release,
     );
+
+    // we need to notify any potential waiters that saw us as busy with last seen epoch id of 0, and are blocking due to
+    // waiting for us to see their new epoch id.
+    //
+    // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
+    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
+    atomic::fence(atomic::Ordering::SeqCst);
+    THREAD_EPOCH_UPDATED_NOTIFY.notify();
 }
 
 fn on_before_task_poll() {
@@ -743,8 +751,10 @@ fn on_before_task_poll() {
         is_busy: true,
     });
 
+    // see `on_thread_unpark` for more info
     atomic::fence(atomic::Ordering::SeqCst);
 
+    // see `on_thread_unpark` for more info
     let epoch_id = this_thread_see_new_epoch_id();
     thread_storage_slot_get_all()[slot_id].state.store(
         ThreadState {
@@ -757,11 +767,7 @@ fn on_before_task_poll() {
         atomic::Ordering::Release,
     );
 
-    // we need to notify any potential waiters that saw us as busy with last seen epoch id of 0, and are blocking due to
-    // waiting for us to see their new epoch id.
-    //
-    // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
+    // see `on_thread_unpark` for more info
     atomic::fence(atomic::Ordering::SeqCst);
     THREAD_EPOCH_UPDATED_NOTIFY.notify();
 }
