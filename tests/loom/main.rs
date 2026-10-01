@@ -140,20 +140,27 @@ fn read_and_write() {
 #[test]
 fn rcu_synchronize_wakes_up_on_thread_park() {
     loom::model(move || {
+        let reader_ready_notify = std::sync::Arc::new(loom::sync::Notify::new());
         let writer_done_notify = std::sync::Arc::new(loom::sync::Notify::new());
         let writer = thread_spawn_with_hooks({
+            let reader_ready_notify = reader_ready_notify.clone();
             let writer_done_notify = writer_done_notify.clone();
             move || {
+                reader_ready_notify.wait();
                 busy_block_on_future(synchronize_rcu());
                 writer_done_notify.notify();
             }
         });
 
         let reader = thread_spawn_with_hooks({
+            let reader_ready_notify = reader_ready_notify.clone();
             let writer_done_notify = writer_done_notify.clone();
             move || {
                 // run the task polling hooks just to register ourselves as an active worker thread in the rcu book-keeping.
                 with_before_after_poll(|| {});
+
+                // tell the writer that he can start his grace period
+                reader_ready_notify.notify();
 
                 // emulate this thread going to sleep
                 tokio_rcu::loom_tests_api::on_thread_park();
@@ -188,6 +195,9 @@ fn rcu_synchronize_wakes_up_on_after_poll_hook_call() {
         });
 
         let reader = thread_spawn_with_hooks(move || {
+            // register this thread
+            tokio_rcu::loom_tests_api::on_before_task_poll();
+
             // wait for the writer to actually start its wait operation, otherwise we may just finish before he even starts,
             // in which case he will block forever.
             //
@@ -201,7 +211,7 @@ fn rcu_synchronize_wakes_up_on_after_poll_hook_call() {
 
             // make sure that the synchronize rcu operation can finish even if all we do is poll tasks and never
             // park.
-            with_before_after_poll(|| {});
+            tokio_rcu::loom_tests_api::on_after_task_poll();
         });
 
         writer.join().unwrap();
@@ -209,6 +219,57 @@ fn rcu_synchronize_wakes_up_on_after_poll_hook_call() {
     });
 }
 
+/// make sure that [`synchronize_rcu`] properly wakes up when a thread unparks.
+#[test]
+fn rcu_synchronize_wakes_up_on_thread_unpark_hook_call() {
+    loom::model(move || {
+        let reader_ready_notify = std::sync::Arc::new(loom::sync::Notify::new());
+        let writer_done_notify = std::sync::Arc::new(loom::sync::Notify::new());
+        let writer = thread_spawn_with_hooks({
+            let reader_ready_notify = reader_ready_notify.clone();
+            let writer_done_notify = writer_done_notify.clone();
+            move || {
+                reader_ready_notify.wait();
+                busy_block_on_future(synchronize_rcu());
+                writer_done_notify.notify();
+            }
+        });
+
+        let reader = thread_spawn_with_hooks({
+            let reader_ready_notify = reader_ready_notify.clone();
+            let writer_done_notify = writer_done_notify.clone();
+            move || {
+                // run the task polling hooks just to register ourselves as an active worker thread in the rcu book-keeping.
+                with_before_after_poll(|| {});
+
+                // emulate this thread going to sleep
+                tokio_rcu::loom_tests_api::on_thread_park();
+
+                // tell the writer that he can start his grace period
+                reader_ready_notify.notify();
+
+                // wait for the writer to actually start its wait operation, otherwise we may just finish before he even starts,
+                // in which case he will block forever.
+                //
+                // after this wait, the writer may or may not have already started blocking, so it makes sure that we can
+                // properly wake him up in case he did.
+                while tokio_rcu::loom_tests_api::epoch_id_get(std::sync::atomic::Ordering::Relaxed)
+                    == tokio_rcu::loom_tests_api::EPOCH_ID_MIN + 2
+                {
+                    loom::thread::yield_now();
+                }
+
+                // call unpark while the writer is waiting for us, and make sure that in all cases he still wakes up properly.
+                tokio_rcu::loom_tests_api::on_thread_unpark();
+
+                writer_done_notify.wait();
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+    });
+}
 /// a test which makes sure that using the guard returned from [`RcuBox::read`] across an await point causes UAF in a controlled and expected manner.
 #[test]
 fn read_and_use_after_quiescent_state_causes_uaf() {
