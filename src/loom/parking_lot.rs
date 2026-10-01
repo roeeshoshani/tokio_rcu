@@ -20,7 +20,7 @@ impl<T> Mutex<T> {
         }
     }
 
-    pub fn lock(&self) -> InnerMutexGuard<'_, T> {
+    pub fn lock(&self) -> MutexGuard<'_, T> {
         #[cfg(not(loom))]
         {
             self.0.lock()
@@ -37,15 +37,10 @@ impl<T> Mutex<T> {
     }
 }
 
-#[cfg(not(loom))]
-type InnerMutexGuard<'a, T> = parking_lot::MutexGuard<'a, T>;
 #[cfg(loom)]
-type InnerMutexGuard<'a, T> = loom::sync::MutexGuard<'a, T>;
-
-/// a loom/std abstraction over parking lot's [`MutexGuard`](parking_lot::MutexGuard).
-pub struct MutexGuard<'a, T> {
-    _inner: InnerMutexGuard<'a, T>,
-}
+pub use loom::sync::MutexGuard;
+#[cfg(not(loom))]
+pub use parking_lot::MutexGuard;
 
 #[cfg(not(loom))]
 type InnerRwLock<T> = parking_lot::RwLock<T>;
