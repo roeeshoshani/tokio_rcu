@@ -756,6 +756,14 @@ fn on_before_task_poll() {
         // writes to synchronize with readers, and we don't want to ruin their synchronization.
         atomic::Ordering::Release,
     );
+
+    // we need to notify any potential waiters that saw us as busy with last seen epoch id of 0, and are blocking due to
+    // waiting for us to see their new epoch id.
+    //
+    // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
+    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
+    atomic::fence(atomic::Ordering::SeqCst);
+    THREAD_EPOCH_UPDATED_NOTIFY.notify();
 }
 
 fn on_after_task_poll() {
