@@ -32,6 +32,11 @@ pub struct Notify {
     /// the head of the list of all current waiters that registered for wake up one the notify object is notified.
     /// the list, including all data contained in all slots contained in it, is protected by the lock.
     waiters_list_head: UnsafeCell<Next>,
+
+    /// the number of currently active active waiters.
+    /// note that this is greater than or equal to the number of waiters in the list, since some waiters may not yet be
+    /// in the list since haven't been polled yet.
+    num_active_waiters: AtomicUsize,
 }
 impl Notify {
     fn_const_if_not_loom! {
@@ -41,6 +46,7 @@ impl Notify {
                 num_wakeups: AtomicUsize::new(0),
                 lock: crate::loom::std::sync::Mutex::new(()),
                 waiters_list_head: UnsafeCell::new(None),
+                num_active_waiters: AtomicUsize::new(0),
             }
         }
     }
@@ -57,6 +63,8 @@ impl Notify {
     /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you,
     /// and all previous notifiers who notified before him.
     ///
+    // TODO: the "and all previous notifiers who notified before him" part is no longer true.
+    ///
     /// # overflow
     ///
     /// note that if after the registration and before the first poll of the returned future, `usize::MAX + 1` calls to `notify` are
@@ -72,21 +80,60 @@ impl Notify {
     /// notifies all currently registered waiters.
     ///
     /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
+    // TODO: the "any notifier after you" part is no longer true.
     pub fn notify(&self) {
         self.notify_impl(false);
     }
 
     /// notifies all currently registered waiters, other than the waiters which were registered by the current thread.
     ///
+    /// note that this may still case a notifier on the current thread to wake up, but it will not explicitly wake its task's
+    /// waker. if that waiter will later be polled for some other reason, it will finish its wait due to this notify calls, but
+    /// this notify call will not explicitly cause it to wake up if it is currently blocking.
+    ///
     /// this is used when the state change being notified about can't possibly be of any interest to the current thread itself.
     /// see [`on_thread_park`](crate::on_thread_park) for the specific case where this is needed, and `Slot::thread_id` for more info.
     ///
     /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
+    // TODO: the "any notifier after you" part is no longer true.
     pub fn notify_except_current_thread(&self) {
         self.notify_impl(true);
     }
 
+    /// increments the number of active waiters using the given ordering.
+    fn inc_num_active_waiters(&self, ordering: atomic::Ordering) {
+        let prev_value = self.num_active_waiters.fetch_add(1, ordering);
+        debug_assert_ne!(prev_value, usize::MAX);
+    }
+
+    /// decrements the number of active waiters using the given ordering.
+    fn dec_num_active_waiters(&self, ordering: atomic::Ordering) {
+        let prev_value = self.num_active_waiters.fetch_sub(1, ordering);
+        debug_assert_ne!(prev_value, 0);
+    }
+
     fn notify_impl(&self, skip_waiters_of_current_thread: bool) {
+        if self.num_active_waiters.load(
+            // we don't need any ordering here, since we don't need any synchronization with writers of this variable.
+            //
+            // there are 2 types of writers to this variable: waiters that register and unregister themselves, and other
+            // notifiers, that write to it when notifying waiters to unregister them.
+            //
+            // for the waiters part, we don't need acquire ordering here, since waiters dont do any special preparation before
+            // writing to this field.
+            //
+            // for the notifiers part, we also don't need acquire, since notifiers only subtract, and the only interesting case
+            // is when this reaches 0, in which case we do nothing.
+            atomic::Ordering::Relaxed,
+        ) == 0
+        {
+            // fast path: no active waiters, no need to do anything.
+            // note that this fast path is especially fast since it is read only - no write operations are performed.
+            // so, in the fast path, all notifier threads don't fight over exclusivity over cache-lines, they can all
+            // share the cache line.
+            return;
+        }
+
         self.num_wakeups.fetch_add(
             1,
             // need release ordering for the memory ordering guarantees chosen for this data structure.
@@ -159,6 +206,13 @@ impl Notify {
                         // but, the lock is poisoned, so whoever tries to lock it next will panic.
                         waker.wake();
                     }
+
+                    // we removed this waiter from the list, and it has woken up.
+                    // so, it is no longer an active waiter, so subtract it from the num active waiters.
+                    self.dec_num_active_waiters(
+                        // no special ordering is needed here. see the load of num active waiters for more info.
+                        atomic::Ordering::Relaxed,
+                    );
                 } else {
                     // the slot belongs to the current thread, so we leave it in the list and don't wake it up.
                     // this means the slot after it is now pointed at by the current slot's link, so we continue from there.
@@ -219,13 +273,25 @@ impl Slot {
 /// a future which will complete once a notification is received.
 /// the future is registered as soon as it is created, and while registered it is listening to any received notifications.
 pub struct Notified<'a> {
-    slot: Slot,
-    num_wakeups_snapshot: usize,
+    /// the notify object from which this notified object was created.
     notify: &'a Notify,
+
+    /// an embedded intrusive linked list slot. used to register ourselves into the waiters list.
+    slot: Slot,
+
+    /// a snapshot of the notify object's num wakeups counter, taken at the point in time when this notified object was created.
+    num_wakeups_snapshot: usize,
+
+    /// have we ever registered ourslves into the waiters list throughout the lifetime of this notified object?
     was_registered_into_list: bool,
 }
 impl<'a> Notified<'a> {
     fn new(notify: &'a Notify) -> Self {
+        notify.inc_num_active_waiters(
+            // no special ordering is needed here. see the load of num active waiters for more info.
+            atomic::Ordering::Relaxed,
+        );
+
         Self {
             slot: Slot::new(),
             num_wakeups_snapshot: notify.num_wakeups.load(
@@ -354,13 +420,20 @@ impl<'a> Future for Notified<'a> {
 unsafe impl<'a> Send for Notified<'a> {}
 unsafe impl<'a> Sync for Notified<'a> {}
 
-impl<'a> Drop for Notified<'a> {
-    fn drop(&mut self) {
-        // if we weren't registered into the list, no cleanup is needed.
-        if !self.was_registered_into_list {
-            return;
-        }
+impl<'a> Notified<'a> {
+    // drop logic for this notified object in the case where it was never registered into the list.
+    fn drop_never_registered_into_list(&mut self) {
+        // subtract ourselves from the num active waiters counter.
+        // note that unlike the case where we were registered into the list, there's no chance that someone had already
+        // subtracted us from the list.
+        self.notify.dec_num_active_waiters(
+            // no special ordering is needed here. see the load of num active waiters for more info.
+            atomic::Ordering::Relaxed,
+        );
+    }
 
+    // drop logic for this notified object in the case where it was registered into the list at some point.
+    fn drop_was_registered_into_list(&mut self) {
         match self.notify.lock.lock() {
             Ok(_guard) => {
                 // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
@@ -393,6 +466,16 @@ impl<'a> Drop for Notified<'a> {
                             let next = next_nonnull.as_ref();
                             next.pprev.get_mut_ptr().write(pprev_opt);
                         }
+
+                        // subtract ourselves from the num active waiters counter
+                        self.notify.dec_num_active_waiters(
+                            // no special ordering is needed here. see the load of num active waiters for more info.
+                            atomic::Ordering::Relaxed,
+                        );
+                    } else {
+                        // in this case, we were once in the list, but were removed from the list.
+                        // in this case, someone had already notified us, and also already subtracted us from the num active
+                        // waiters counter, so we don't need to do anything.
                     }
                 }
             }
@@ -402,8 +485,28 @@ impl<'a> Drop for Notified<'a> {
                 // longer be accessed by anyone.
                 // so it doesn't matter whether we are in the list or not, we can just release all of our memory without having to
                 // first remove ourselves from the list.
+                //
+                // but, we do want to subtract ourselves from the num waiters counter. the notify object is still partially
+                // functional through the num wakeups counter and the num waiters counters, as long as the list is not used.
+                // so, we should at least make sure to clean up ourselves for that mechanism.
+                // TODO: could someone have panicked after subtracting us? make sure this never happens so that we don't
+                // subtract twice.
+                // TODO: what if we were removed from the list?
+                self.notify.dec_num_active_waiters(
+                    // no special ordering is needed here. see the load of num active waiters for more info.
+                    atomic::Ordering::Relaxed,
+                );
             }
         };
+    }
+}
+impl<'a> Drop for Notified<'a> {
+    fn drop(&mut self) {
+        if self.was_registered_into_list {
+            self.drop_was_registered_into_list();
+        } else {
+            self.drop_never_registered_into_list();
+        }
     }
 }
 
