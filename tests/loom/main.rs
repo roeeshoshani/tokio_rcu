@@ -2,7 +2,7 @@
 
 use std::{pin::pin, task::Poll};
 
-use tokio_rcu::rcu_box::RcuBox;
+use tokio_rcu::{rcu_box::RcuBox, synchronize_rcu};
 
 use crate::{loom_waker::LoomWaker, uaf_detector::UafDetector};
 
@@ -136,6 +136,42 @@ fn read_and_write() {
     );
 }
 
+/// make sure that [`synchronize_rcu`] properly wakes up when the other thread goes to sleep.
+#[test]
+fn rcu_synchronize_wakes_up_on_thread_park() {
+    loom::model(move || {
+        let writer_done_notify = std::sync::Arc::new(loom::sync::Notify::new());
+        let writer = thread_spawn_with_hooks({
+            let writer_done_notify = writer_done_notify.clone();
+            move || {
+                busy_block_on_future(synchronize_rcu());
+                writer_done_notify.notify();
+            }
+        });
+
+        let reader = thread_spawn_with_hooks({
+            let writer_done_notify = writer_done_notify.clone();
+            move || {
+                // run the task polling hooks just to register ourselves as an active worker thread in the rcu book-keeping.
+                with_before_after_poll(|| {});
+
+                // emulate this thread going to sleep
+                tokio_rcu::loom_tests_api::on_thread_park();
+
+                // make sure that the synchronize rcu operation finishes even when we remain parked.
+                // this check that the synchronize rcu operation properly detects that this thread parked and can thus be
+                // ignored.
+                writer_done_notify.wait();
+
+                // don't forget to call the proper unpark hook
+                tokio_rcu::loom_tests_api::on_thread_unpark();
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+    });
+}
 /// a test which makes sure that using the guard returned from [`RcuBox::read`] across an await point causes UAF in a controlled and expected manner.
 #[test]
 fn read_and_use_after_quiescent_state_causes_uaf() {
