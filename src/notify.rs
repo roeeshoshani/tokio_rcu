@@ -27,7 +27,7 @@ pub struct Notify {
     ///
     /// if a slot may or may not be in the waiters list, you must lock this lock to access it, and only if you know for sure
     /// that it is not in the waiters list, you can safely access it without this lock.
-    lock: crate::loom::std::sync::Mutex<()>,
+    lock: crate::loom::parking_lot::Mutex<()>,
 
     /// the head of the list of all current waiters that registered for wake up one the notify object is notified.
     /// the list, including all data contained in all slots contained in it, is protected by the lock.
@@ -44,7 +44,7 @@ impl Notify {
         pub const fn new() -> Self {
             Self {
                 num_wakeups: AtomicUsize::new(0),
-                lock: crate::loom::std::sync::Mutex::new(()),
+                lock: crate::loom::parking_lot::Mutex::new(()),
                 waiters_list_head: UnsafeCell::new(None),
                 num_active_waiters: AtomicUsize::new(0),
             }
@@ -145,7 +145,7 @@ impl Notify {
         // only fetch the current thread id if we actually need it, since this is not free under loom.
         let cur_thread_id = skip_waiters_of_current_thread.then(|| thread::current().id());
 
-        let _guard = self.lock.lock().unwrap();
+        let _guard = self.lock.lock();
 
         // SAFETY: in the following code, we assume exclusivity over all data in the list due to the lock.
         //
@@ -199,20 +199,19 @@ impl Notify {
                     // itself from the list or not.
                     cur_slot.is_in_list.get_mut_ptr().write(false);
 
-                    let waker_opt = cur_slot.waker.get_mut_ptr().replace(None);
-                    if let Some(waker) = waker_opt {
-                        // if this panics, nothing REALLY bad happens.
-                        // the list is currently in a valid state, and this node is no longer part of it.
-                        // but, the lock is poisoned, so whoever tries to lock it next will panic.
-                        waker.wake();
-                    }
-
-                    // we removed this waiter from the list, and it has woken up.
-                    // so, it is no longer an active waiter, so subtract it from the num active waiters.
+                    // we removed this waiter from the list, so it is no longer an active waiter. subtract it from the num
+                    // active waiters counter.
                     self.dec_num_active_waiters(
                         // no special ordering is needed here. see the load of num active waiters for more info.
                         atomic::Ordering::Relaxed,
                     );
+
+                    let waker_opt = cur_slot.waker.get_mut_ptr().replace(None);
+                    if let Some(waker) = waker_opt {
+                        // if this panics, nothing bad happens.
+                        // the list is currently in a valid state, and this node is no longer part of it.
+                        waker.wake();
+                    }
                 } else {
                     // the slot belongs to the current thread, so we leave it in the list and don't wake it up.
                     // this means the slot after it is now pointed at by the current slot's link, so we continue from there.
@@ -324,7 +323,7 @@ impl<'a> Future for Notified<'a> {
 
         // extra scope for scoping the lock guard
         {
-            let _guard = self.notify.lock.lock().unwrap();
+            let _guard = self.notify.lock.lock();
 
             // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
             unsafe {
@@ -434,70 +433,50 @@ impl<'a> Notified<'a> {
 
     // drop logic for this notified object in the case where it was registered into the list at some point.
     fn drop_was_registered_into_list(&mut self) {
-        match self.notify.lock.lock() {
-            Ok(_guard) => {
-                // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
-                unsafe {
-                    let is_in_list = self.slot.is_in_list.get_const_ptr().read();
-                    if is_in_list {
-                        // remove ourselves from the list
+        let _guard = self.notify.lock.lock();
 
-                        let pprev_opt = self.slot.pprev.get_mut_ptr().replace(None);
-                        let next_opt = self.slot.next.get_const_ptr().read();
+        // SAFETY: all unsafe actions below assume exclusive access due to holding the lock.
+        unsafe {
+            let is_in_list = self.slot.is_in_list.get_const_ptr().read();
+            if is_in_list {
+                // remove ourselves from the list
 
-                        // set prev's next to our next
-                        match &pprev_opt {
-                            Some(pprev_nonnull) => {
-                                pprev_nonnull.write(next_opt);
-                            }
-                            None => {
-                                // when we are in the list but pprev is `None`, it means that we are the head of the list
-                                debug_assert_eq!(
-                                    self.notify.waiters_list_head.get_const_ptr().read(),
-                                    Some(NonNull::from_ref(&self.slot))
-                                );
+                let pprev_opt = self.slot.pprev.get_mut_ptr().replace(None);
+                let next_opt = self.slot.next.get_const_ptr().read();
 
-                                self.notify.waiters_list_head.get_mut_ptr().write(next_opt);
-                            }
-                        }
-
-                        // set next's pprev to our pprev
-                        if let Some(next_nonnull) = next_opt {
-                            let next = next_nonnull.as_ref();
-                            next.pprev.get_mut_ptr().write(pprev_opt);
-                        }
-
-                        // subtract ourselves from the num active waiters counter
-                        self.notify.dec_num_active_waiters(
-                            // no special ordering is needed here. see the load of num active waiters for more info.
-                            atomic::Ordering::Relaxed,
+                // set prev's next to our next
+                match &pprev_opt {
+                    Some(pprev_nonnull) => {
+                        pprev_nonnull.write(next_opt);
+                    }
+                    None => {
+                        // when we are in the list but pprev is `None`, it means that we are the head of the list
+                        debug_assert_eq!(
+                            self.notify.waiters_list_head.get_const_ptr().read(),
+                            Some(NonNull::from_ref(&self.slot))
                         );
-                    } else {
-                        // in this case, we were once in the list, but were removed from the list.
-                        // in this case, someone had already notified us, and also already subtracted us from the num active
-                        // waiters counter, so we don't need to do anything.
+
+                        self.notify.waiters_list_head.get_mut_ptr().write(next_opt);
                     }
                 }
-            }
-            Err(_) => {
-                // if the lock is poisoned, someone panicked while holding it.
-                // in this case, the `Notify` that this future is associated with is basically dead, and the waiter list will no
-                // longer be accessed by anyone.
-                // so it doesn't matter whether we are in the list or not, we can just release all of our memory without having to
-                // first remove ourselves from the list.
-                //
-                // but, we do want to subtract ourselves from the num waiters counter. the notify object is still partially
-                // functional through the num wakeups counter and the num waiters counters, as long as the list is not used.
-                // so, we should at least make sure to clean up ourselves for that mechanism.
-                // TODO: could someone have panicked after subtracting us? make sure this never happens so that we don't
-                // subtract twice.
-                // TODO: what if we were removed from the list?
+
+                // set next's pprev to our pprev
+                if let Some(next_nonnull) = next_opt {
+                    let next = next_nonnull.as_ref();
+                    next.pprev.get_mut_ptr().write(pprev_opt);
+                }
+
+                // subtract ourselves from the num active waiters counter
                 self.notify.dec_num_active_waiters(
                     // no special ordering is needed here. see the load of num active waiters for more info.
                     atomic::Ordering::Relaxed,
                 );
+            } else {
+                // in this case, we were once in the list, but were removed from the list.
+                // in this case, someone had already notified us, and also already subtracted us from the num active
+                // waiters counter, so we don't need to do anything.
             }
-        };
+        }
     }
 }
 impl<'a> Drop for Notified<'a> {

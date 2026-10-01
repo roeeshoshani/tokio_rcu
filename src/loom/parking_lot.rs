@@ -1,8 +1,54 @@
 use crate::loom::fn_const_if_not_loom;
 
 #[cfg(not(loom))]
-type InnerRwLock<T> = parking_lot::RwLock<T>;
+type InnerMutex<T> = parking_lot::Mutex<T>;
+#[cfg(loom)]
+type InnerMutex<T> = loom::sync::Mutex<T>;
 
+/// a loom/std abstraction over parking lot's [`Mutex`], providing a unified API specifically tied to the use of [`Mutex`] in this crate.
+///
+/// note that like parking lot's mutex, this lock does not support poisoning, it releases normally on panic.
+///
+/// [`Mutex`]: parking_lot::Mutex
+pub struct Mutex<T>(InnerMutex<T>);
+impl<T> Mutex<T> {
+    fn_const_if_not_loom! {
+        /// creates a new mutex with the given initial value.
+        #[inline(always)]
+        pub const fn new(value: T) -> Self {
+            Self(InnerMutex::new(value))
+        }
+    }
+
+    pub fn lock(&self) -> InnerMutexGuard<'_, T> {
+        #[cfg(not(loom))]
+        {
+            self.0.lock()
+        }
+
+        #[cfg(loom)]
+        {
+            // ignore poisoning to emulate parking lot's mutex behaviour
+            match self.0.lock() {
+                Ok(x) => x,
+                Err(x) => x.into_inner(),
+            }
+        }
+    }
+}
+
+#[cfg(not(loom))]
+type InnerMutexGuard<'a, T> = parking_lot::MutexGuard<'a, T>;
+#[cfg(loom)]
+type InnerMutexGuard<'a, T> = loom::sync::MutexGuard<'a, T>;
+
+/// a loom/std abstraction over parking lot's [`MutexGuard`](parking_lot::MutexGuard).
+pub struct MutexGuard<'a, T> {
+    _inner: InnerMutexGuard<'a, T>,
+}
+
+#[cfg(not(loom))]
+type InnerRwLock<T> = parking_lot::RwLock<T>;
 #[cfg(loom)]
 type InnerRwLock<T> = loom::sync::RwLock<T>;
 
