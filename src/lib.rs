@@ -324,7 +324,13 @@ static_or_loom_lazy_static! {
 /// any operation performed before it once his fence is over.
 ///
 /// this then allows us to only consider busy threads when later waiting for threads to see our modified epoch id.
+///
+/// note that this function is currently unused since in practice we usually achieve the post epoch id modification sc fence
+/// by combining it with the SC fence performed by the [`wait_for_running_threads_to_see_epoch_id`] function.
+/// but, we still keep this function, mainly for documentation, and as a way to refer to the sc fence that is needed after an
+/// epoch id modification.
 #[inline(always)]
+#[allow(unused)]
 fn post_epoch_id_modification_sc_fence() {
     atomic::fence(atomic::Ordering::SeqCst);
 }
@@ -355,7 +361,8 @@ pub async fn synchronize_rcu() {
     // passed through a quiescent state.
     match epoch_id_inc() {
         Ok(new_epoch_id) => {
-            post_epoch_id_modification_sc_fence();
+            // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
+            // performs that SC fence for us.
 
             // wait for all threads to see the new epoch id.
             // we only need to consider busy threads thanks to the SC fence.
@@ -399,7 +406,8 @@ pub async fn synchronize_rcu() {
                 // reset the epoch id
                 epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
 
-                post_epoch_id_modification_sc_fence();
+                // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
+                // performs that SC fence for us.
 
                 // wait for all threads to update their last seen epoch id to the reset value.
                 // we only need to consider busy threads thanks to the SC fence.
@@ -426,7 +434,8 @@ pub async fn synchronize_rcu() {
                     atomic::Ordering::Release,
                 );
 
-                post_epoch_id_modification_sc_fence();
+                // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
+                // performs that SC fence for us.
 
                 // wait for all threads to see the epoch id increment, and to move away from the reset value.
                 // we only need to consider busy threads thanks to the SC fence.
@@ -481,6 +490,8 @@ pub async fn synchronize_rcu() {
 ///
 /// if `include_calling_thread` is set, this function also waits for the calling thread itself to see the updated epoch id as implemented
 /// in the given predicate. this is usually not needed and should be set to `false`. see [`synchronize_rcu`] for more info.
+///
+/// this function also performs an SC fence before reading any of the thread states.
 async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     last_seen_epoch_id_predicate: F,
     include_calling_thread: bool,
