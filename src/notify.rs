@@ -57,13 +57,7 @@ impl Notify {
     /// any notification received after this function returns, even if it wasn't `poll`ed or `await`ed yet, will be received by the
     /// returned future, and once `poll`ed it will complete immediately.
     ///
-    /// the registration operation performed by this function provides acquire memory ordering against all previous notifiers of this
-    /// notify data structure.
-    ///
-    /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you,
-    /// and all previous notifiers who notified before him.
-    ///
-    // TODO: the "and all previous notifiers who notified before him" part is no longer true.
+    /// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you.
     ///
     /// # overflow
     ///
@@ -80,7 +74,6 @@ impl Notify {
     /// notifies all currently registered waiters.
     ///
     /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
-    // TODO: the "any notifier after you" part is no longer true.
     pub fn notify(&self) {
         self.notify_impl(false);
     }
@@ -95,7 +88,6 @@ impl Notify {
     /// see [`on_thread_park`](crate::on_thread_park) for the specific case where this is needed, and `Slot::thread_id` for more info.
     ///
     /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
-    // TODO: the "any notifier after you" part is no longer true.
     pub fn notify_except_current_thread(&self) {
         self.notify_impl(true);
     }
