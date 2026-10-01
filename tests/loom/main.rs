@@ -172,6 +172,38 @@ fn rcu_synchronize_wakes_up_on_thread_park() {
         reader.join().unwrap();
     });
 }
+
+/// make sure that [`synchronize_rcu`] properly wakes up when the other thread passes through the after task poll hook.
+#[test]
+fn rcu_synchronize_wakes_up_on_after_poll_hook_call() {
+    loom::model(move || {
+        let is_writer_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let writer = thread_spawn_with_hooks({
+            let is_writer_done = is_writer_done.clone();
+            move || {
+                busy_block_on_future(synchronize_rcu());
+                is_writer_done.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+        });
+
+        let reader = thread_spawn_with_hooks({
+            move || {
+                while !is_writer_done.load(std::sync::atomic::Ordering::Relaxed) {
+                    // make sure that the synchronize rcu operation can finish even if all we do is poll tasks and never
+                    // park.
+                    with_before_after_poll(|| {});
+
+                    loom::thread::yield_now();
+                }
+            }
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+    });
+}
+
 /// a test which makes sure that using the guard returned from [`RcuBox::read`] across an await point causes UAF in a controlled and expected manner.
 #[test]
 fn read_and_use_after_quiescent_state_causes_uaf() {
