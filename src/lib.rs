@@ -575,6 +575,14 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         // some of the threads haven't yet seen our new epoch id.
         // so, wait for them to go through a quiescent state and see our new epoch id, or to go to sleep.
         notified.await;
+
+        // in loom mode, add a hint to the loom model that this is a wait loop that depends on other threads to make progress
+        // for this to properly continue, otherwise we get stuck in an infinite loop of not seeing the progress made by any
+        // of the threads.
+        #[cfg(loom)]
+        {
+            ::loom::thread::yield_now();
+        }
     }
 }
 

@@ -187,16 +187,21 @@ fn rcu_synchronize_wakes_up_on_after_poll_hook_call() {
             }
         });
 
-        let reader = thread_spawn_with_hooks({
-            move || {
-                while !is_writer_done.load(std::sync::atomic::Ordering::Relaxed) {
-                    // make sure that the synchronize rcu operation can finish even if all we do is poll tasks and never
-                    // park.
-                    with_before_after_poll(|| {});
-
-                    loom::thread::yield_now();
-                }
+        let reader = thread_spawn_with_hooks(move || {
+            // wait for the writer to actually start its wait operation, otherwise we may just finish before he even starts,
+            // in which case he will block forever.
+            //
+            // after this wait, the writer may or may not have already started blocking, so it makes sure that we can
+            // properly wake him up in case he did.
+            while tokio_rcu::loom_tests_api::epoch_id_get(std::sync::atomic::Ordering::Relaxed)
+                == tokio_rcu::loom_tests_api::EPOCH_ID_MIN + 2
+            {
+                loom::thread::yield_now();
             }
+
+            // make sure that the synchronize rcu operation can finish even if all we do is poll tasks and never
+            // park.
+            with_before_after_poll(|| {});
         });
 
         writer.join().unwrap();
