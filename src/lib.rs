@@ -248,7 +248,7 @@
 //! cargo +nightly all-features miri test --doc
 //! ```
 //!
-//! for miri we run the same regualr test suite, but under miri.
+//! for miri we run the same regular test suite, but under miri.
 //!
 //! ## loom
 //!
