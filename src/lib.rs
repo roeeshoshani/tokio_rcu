@@ -240,6 +240,30 @@
 //! it is also recommended to run the tests in release mode since it increases the probability of being able to find race conditions and
 //! other hard to catch edge cases.
 //!
+//! ## miri
+//!
+//! to run the miri tests, run:
+//! ```bash
+//! cargo +nightly all-features miri nextest run
+//! cargo +nightly all-features miri test --doc
+//! ```
+//!
+//! for miri we run the same regualr test suite, but under miri.
+//!
+//! ## loom
+//!
+//! to run the loom tests, run:
+//! ```bash
+//! LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test --test loom --release
+//! ```
+//!
+//! the loom test suite can be found in `tests/loom/`, and aims to make sure that this crate is actually correct in the memory
+//! ordering sense of things, and that all the specially crafted atomic operations and fences actually provide the required
+//! guarantees.
+//!
+//! when running a full suite, it is recommended to actually run with `LOOM_MAX_PREEMPTIONS=4`, but this takes a lot of time,
+//! so during development, `LOOM_MAX_PREEMPTIONS=3` is used, which should be enough for most bugs.
+//!
 //! # platform support
 //!
 //! this crate is supported on every platform that is supported by tokio.
