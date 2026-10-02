@@ -526,8 +526,8 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         // update the thread's state, and then call `notify`.
         // but, there might be a scenario where the quiescent states miss our `notified` registration so their `notify` call
         // does not wake us, but we miss their state update, so we go to sleep, causing a deadlock.
-        // this fence prevents that scenario from ever occuring, by making sure that either wee see the state update, or they
-        // see our `notifed` registration. the case where we both miss each other is no longer possible.
+        // this fence prevents that scenario from ever occurring, by making sure that either wee see the state update, or they
+        // see our `notified` registration. the case where we both miss each other is no longer possible.
         atomic::fence(std::sync::atomic::Ordering::SeqCst);
 
         // we must re-calculate this every iteration since our task may be sent between threads every time we await the notified future.

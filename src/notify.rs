@@ -656,7 +656,7 @@ mod tests {
 
         // extra scope to scope the lifetime of the pinned notified values.
         {
-            // create 2 more nofitied objects, one will be removed by the failing notify call, and one will be dropped at
+            // create 2 more notified objects, one will be removed by the failing notify call, and one will be dropped at
             // the end of the scope, to check both cases.
             let notified1 = pin!(notify.notified());
             let notified2 = pin!(notify.notified());
@@ -677,7 +677,7 @@ mod tests {
             // make sure that dropping both of them, in both of their states, should work fine, even after the panic.
         }
 
-        // notifying once more should once again panic, and should also remove the remaining notifed object from the list,
+        // notifying once more should once again panic, and should also remove the remaining notified object from the list,
         // making the list empty.
         let err = std::panic::catch_unwind(AssertUnwindSafe(|| {
             notify.notify();
