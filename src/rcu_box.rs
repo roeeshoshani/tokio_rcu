@@ -2,12 +2,10 @@
 //!
 //! the main type of this module is [`RcuBox`].
 
-use std::{
-    ops::Deref,
-    sync::atomic::{self, AtomicPtr},
-};
+use std::ops::Deref;
 
 use crate::{
+    loom::std::sync::atomic::{self, AtomicPtr},
     per_thread_storage::this_thread_does_have_allocated_storage_slot,
     synchronize_rcu,
     utils::{PhantomUnsend, PtrMutSendSync},
@@ -69,7 +67,7 @@ impl<T> RcuBoxOldData<T> {
     /// function is not cancellation safe. if cancelled, it will leak the old data and panic.
     pub async fn wait(self) -> Box<T> {
         // wait for all previous readers to stop using the old value
-        synchronize_rcu(true).await;
+        synchronize_rcu().await;
 
         // SAFETY: all existing readers finished using this data, so it is now exclusively ours.
         // also, the data pointer is always valid and points to valid data by the invariants of the `RcuBox` type.
@@ -152,7 +150,7 @@ macro_rules! impl_multiple_rcu_old_data_instances_for_tuple {
 
             async fn wait(self) -> Self::WaitResult {
                 // wait for all previous readers to stop using the old value
-                synchronize_rcu(true).await;
+                synchronize_rcu().await;
 
                 // SAFETY: all existing readers finished using this data, so it is now exclusively ours.
                 // also, the data pointers are always valid and point to valid data by the invariants of the `RcuBox` type.

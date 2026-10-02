@@ -244,14 +244,33 @@ only, and allows testing some internal edge cases of this crate which are extrem
 it is also recommended to run the tests in release mode since it increases the probability of being able to find race conditions and
 other hard to catch edge cases.
 
+### miri
+
+to run the miri tests, run:
+```bash
+cargo +nightly all-features miri nextest run
+cargo +nightly all-features miri test --doc
+```
+
+for miri we run the same regular test suite, but under miri.
+
+### loom
+
+to run the loom tests, run:
+```bash
+LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test --test loom --release
+```
+
+the loom test suite can be found in `tests/loom/`, and aims to make sure that this crate is actually correct in the memory
+ordering sense of things, and that all the specially crafted atomic operations and fences actually provide the required
+guarantees.
+
+when running a full suite, it is recommended to actually run with `LOOM_MAX_PREEMPTIONS=4`, but this takes a lot of time,
+so during development, `LOOM_MAX_PREEMPTIONS=3` is used, which should be enough for most bugs.
+
 ## platform support
 
-currently, this crate only works on linux and windows.
-
-the limitation stems from the membarrier operation, which is currently only implemented for linux (using the membarrier syscall),
-and windows (using FlushProcessWriteBuffers).
-
-more platforms can be added in the future if needed, and given that they have a way to emulate the behaviour of membarrier.
+this crate is supported on every platform that is supported by tokio.
 
 ## license
 

@@ -3,12 +3,13 @@
 //! usually, for representing thread local state, [`thread_local!`] is used.
 //! but, for the thread state we need the ability to iterate over the thread local state value of all currently registered threads.
 //! this is not possible with [`thread_local!`], so we manually implement that mechanism.
-use std::{cell::Cell, num::NonZeroU16};
+use std::num::NonZeroU16;
 
 use index_type::IndexType;
 
 use crate::{
     atomic_type::Atomic,
+    loom::{fn_const_if_not_loom, static_or_loom_lazy_static, std::cell::Cell},
     thread_state::{EncodedThreadState, ThreadState},
 };
 
@@ -30,10 +31,12 @@ pub struct ThreadStorageSlotValue {
     pub state: Atomic<EncodedThreadState>,
 }
 
-/// the actual storage slots.
-/// each thread allocates a slot by finding an empty one and acquiring it.
-/// all slots are initially empty.
-static THREAD_STORAGE_SLOTS: ThreadStorageSlots = ThreadStorageSlots::new();
+static_or_loom_lazy_static! {
+    /// the actual storage slots.
+    /// each thread allocates a slot by finding an empty one and acquiring it.
+    /// all slots are initially empty.
+    static THREAD_STORAGE_SLOTS: ThreadStorageSlots = ThreadStorageSlots::new();
+}
 
 /// returns all storage slots for iterating over the state of all existing threads.
 pub fn thread_storage_slot_get_all() -> ThreadStorageSlotsReadGuard<'static> {
@@ -49,31 +52,41 @@ pub struct OwnedThreadStorageSlot {
     id: Cell<Option<ThreadStorageSlotId>>,
 }
 impl OwnedThreadStorageSlot {
-    /// creates a new unallocated instance not associated with any actual slot.
-    /// to allocate a slot, call the [`allocate`](Self::alloc) function.
-    pub const fn unallocated() -> Self {
-        Self {
-            id: Cell::new(None),
+    fn_const_if_not_loom! {
+        /// creates a new unallocated instance not associated with any actual slot.
+        /// to allocate a slot, call the [`allocate`](Self::alloc) function.
+        pub const fn unallocated() -> Self {
+            Self {
+                id: Cell::new(None),
+            }
         }
     }
 
     /// allocates a new slot for the current thread, if one is not already allocated.
     /// if a slot is already allocated, this function does nothing.
-    pub fn alloc(&self, initial_thread_state: ThreadState) {
-        if self.id.get().is_some() {
-            return;
+    ///
+    /// returns the id of the new allocated slot, or the id of the existing slot if there is one.
+    pub fn alloc(&self, initial_thread_state: ThreadState) -> ThreadStorageSlotId {
+        if let Some(existing_id) = self.id.get() {
+            return existing_id;
         }
         let id = THREAD_STORAGE_SLOTS.alloc(initial_thread_state);
         self.id.set(Some(id));
+        id
     }
 
     /// deallocates the current slot, if any.
     /// if no slot is currently allocated, this function does nothing.
-    pub fn dealloc(&self) {
-        let Some(id) = self.id.get() else { return };
+    ///
+    /// returns `true` if a slot was previously allocated and was deallocated, returns `false` if no slot was allocated.
+    pub fn dealloc(&self) -> bool {
+        let Some(id) = self.id.get() else {
+            return false;
+        };
         // SAFETY: this slot was previously allocated from the global storage slots buffer, and was not freed yet.
         unsafe { THREAD_STORAGE_SLOTS.dealloc(id) };
         self.id.set(None);
+        true
     }
 
     /// returns the id of the current slot, if any.
@@ -87,9 +100,14 @@ impl Drop for OwnedThreadStorageSlot {
     }
 }
 
-thread_local! {
+#[cfg(not(loom))]
+std::thread_local! {
     /// a thread local variable which represents the storage slot currently owned by the current thread.
     static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = const { OwnedThreadStorageSlot::unallocated() };
+}
+#[cfg(loom)]
+loom::thread_local! {
+    static THREAD_STORAGE_SLOT: OwnedThreadStorageSlot = OwnedThreadStorageSlot::unallocated();
 }
 
 /// returns the storage slot id of the current thread, assuming that a storage slot was already allocated for the current
@@ -104,11 +122,13 @@ pub fn this_thread_does_have_allocated_storage_slot() -> bool {
 }
 
 /// allocates a storage slot for the current thread, if one is not already allocated.
-pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) {
+pub fn this_thread_alloc_storage_slot(initial_thread_state: ThreadState) -> ThreadStorageSlotId {
     THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.alloc(initial_thread_state))
 }
 
 /// deallocates the storage slot owned by the current thread, if any.
-pub fn this_thread_dealloc_storage_slot() {
+///
+/// returns `true` if a slot was previously allocated and was deallocated, returns `false` if no slot was allocated.
+pub fn this_thread_dealloc_storage_slot() -> bool {
     THREAD_STORAGE_SLOT.with(|storage_slot| storage_slot.dealloc())
 }

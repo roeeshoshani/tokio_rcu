@@ -65,9 +65,15 @@ fn read_from_main_thread_after_runtime_finished() {
 #[test]
 fn swap_inside_with_by_manually_polling_never_finishes() {
     rcu_block_on(async {
-        let rcu_box = Arc::new(RcuBox::new(Box::new(String::from(
-            "some interesting piece of text",
-        ))));
+        let mut initial_data_box = Box::new(String::from("some interesting piece of text"));
+
+        // save a pointer to the initial data so that we can manually free it once it is leaked due to the invalid operation performed
+        // in this test.
+        // in real code it would be leaked, but for the sake of this test, we know we can free it, so we manually free it when the test ends,
+        // to avoid leaking memory, and to make MIRI happy.
+        let initial_data_box_ptr = Box::as_mut_ptr(&mut initial_data_box);
+
+        let rcu_box = Arc::new(RcuBox::new(initial_data_box));
         rcu_box.with({
             let rcu_box = rcu_box.clone();
             move |value| {
@@ -98,7 +104,11 @@ fn swap_inside_with_by_manually_polling_never_finishes() {
                     extract_string_panic_message(err).contains(SWAP_FUTURE_CANT_BE_DROPPED_ERR)
                 );
             }
-        })
+        });
+
+        // the old data is now leaked. free it manually.
+        // SAFETY: the data was swapped out and was leaked, so it is no longer used by anyone.
+        let _ = unsafe { Box::from_raw(initial_data_box_ptr) };
     });
 }
 
