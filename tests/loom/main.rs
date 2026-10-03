@@ -92,12 +92,14 @@ fn read_and_write() {
                     let check_guard_logic = |guard: &UafDetector| {
                         let guard_ptr = guard as *const UafDetector;
                         if guard_ptr == uaf_detector0_ptr {
-                            let id = guard.id(uaf_detector0_key);
+                            // SAFETY: guard points to a heap allocation
+                            let id = unsafe { guard.id_byref(uaf_detector0_key) };
                             assert_eq!(id, 0);
                             results.lock().saw_id0 = true;
                             id
                         } else if guard_ptr == uaf_detector1_ptr {
-                            let id = guard.id(uaf_detector1_key);
+                            // SAFETY: guard points to a heap allocation
+                            let id = unsafe { guard.id_byref(uaf_detector1_key) };
                             assert_eq!(id, 1);
                             results.lock().saw_id1 = true;
                             id
@@ -308,7 +310,8 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                     let guard_ptr = guard_ref as *const UafDetector;
                     if guard_ptr == uaf_detector0_ptr {
                         // the first UAF detector may actually be in a UAF situation.
-                        match guard.try_id(uaf_detector0_key) {
+                        // SAFETY: guard points to a heap allocation
+                        match unsafe { guard.try_id_byref(uaf_detector0_key) } {
                             Some(id) => {
                                 assert_eq!(id, 0);
                                 results.lock().saw_id0 = true;
@@ -319,7 +322,8 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                         }
                     } else if guard_ptr == uaf_detector1_ptr {
                         // the second UAF detector can't be UAF'd.
-                        assert_eq!(guard.id(uaf_detector1_key), 1);
+                        // SAFETY: guard points to a heap allocation
+                        assert_eq!(unsafe { guard.id_byref(uaf_detector1_key) }, 1);
                         results.lock().saw_id1 = true;
                     } else {
                         panic!("unexpected ptr");
@@ -386,12 +390,14 @@ fn read_and_write_with_reset() {
                     let check_guard_logic = |guard: &UafDetector| {
                         let guard_ptr = guard as *const UafDetector;
                         if guard_ptr == uaf_detector0_ptr {
-                            let id = guard.id(uaf_detector0_key);
+                            // SAFETY: guard points to a heap allocation
+                            let id = unsafe { guard.id_byref(uaf_detector0_key) };
                             assert_eq!(id, 0);
                             results.lock().saw_id0 = true;
                             id
                         } else if guard_ptr == uaf_detector1_ptr {
-                            let id = guard.id(uaf_detector1_key);
+                            // SAFETY: guard points to a heap allocation
+                            let id = unsafe { guard.id_byref(uaf_detector1_key) };
                             assert_eq!(id, 1);
                             results.lock().saw_id1 = true;
                             id
