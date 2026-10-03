@@ -262,7 +262,7 @@ impl UafDetectorSupportingAllocator {
 
             // can re-alloc this slot
             REALLOC_POOL
-                .with(|realloc_poll| realloc_poll.borrow_mut().slots.push(reconstructed_box))
+                .with(|realloc_pool| realloc_pool.borrow_mut().slots.push(reconstructed_box))
         }
     }
 }
