@@ -273,6 +273,10 @@ unsafe impl GlobalAlloc for UafDetectorSupportingAllocator {
         // SAFETY: the layout is not zero sized since it at least contains the allocation prefix
         let ptr = unsafe { std::alloc::System.alloc(alloc_layout) };
 
+        if ptr.is_null() {
+            return ptr;
+        }
+
         // SAFETY: the calculated alloc layout makes the returned pointer a valid pointer to a [`AllocPrefixAtomic`].
         // furthermore, we are currently the only one with access to this allocation, so we can initialize the atomic
         // directly and don't need an atomic write.
