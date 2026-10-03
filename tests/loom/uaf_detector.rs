@@ -78,7 +78,7 @@ impl Drop for ThreadReallocPool {
 thread_local! {
     /// the per-thread local realloc pool.
     ///
-    /// when a uaf detector is deallocated, it is put in the realloc pool of the thread of the thread on which the deallocation
+    /// when a uaf detector is deallocated, it is put in the realloc pool of the thread on which the deallocation
     /// was performed.
     ///
     /// then, when handling a new uaf detector allocation request, we re-use the allocations in this pool.
@@ -104,7 +104,7 @@ struct UafDetectorSupportingAllocator {
     /// when set to `false`, the global realloc pool is guaranteed to be empty at the point of sampling.
     /// when set to `true`, the global realloc pool is probably not empty, but may still be empty in some cases.
     ///
-    /// must only be written too while holding the global pool mutex, but can be read without holding the mutex.
+    /// must only be written to while holding the global pool mutex, but can be read without holding the mutex.
     does_realloc_pool_contain_items: std::sync::atomic::AtomicBool,
 }
 impl UafDetectorSupportingAllocator {
@@ -214,13 +214,13 @@ impl UafDetectorSupportingAllocator {
         }
     }
 
-    /// returns the a pointer to the prefix (AKAK tag) of the given uaf detector allocation.
+    /// returns a pointer to the prefix (AKA tag) of the given uaf detector allocation.
     fn uaf_detector_get_prefix_ref(uaf_detector: &Box<UafDetector>) -> &AllocPrefixAtomic {
         // SAFETY: the uaf detector is boxed, so it is heap allocated
         unsafe { Self::uaf_detector_get_prefix_ref_byref(&uaf_detector) }
     }
 
-    /// returns the a pointer to the prefix (AKAK tag) of the given uaf detector allocation, by reference.
+    /// returns a pointer to the prefix (AKA tag) of the given uaf detector allocation, by reference.
     ///
     /// this is an unsafe version which takes a reference as argument.
     /// see [`uaf_detector_get_prefix_ref`](Self::uaf_detector_get_prefix_ref) a safe alternative.
@@ -292,7 +292,7 @@ unsafe impl GlobalAlloc for UafDetectorSupportingAllocator {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: std::alloc::Layout) {
         let (alloc_layout, data_off) = Self::calc_alloc_layout(layout).unwrap();
 
-        // SAFETY: every pointer we allocate has a prefix, and moving back to that preifx is just moving within the allocation,
+        // SAFETY: every pointer we allocate has a prefix, and moving back to that prefix is just moving within the allocation,
         // so it should be safe.
         let alloc_ptr = unsafe { ptr.byte_sub(data_off) };
 
@@ -344,8 +344,7 @@ impl UafDetector {
     ///
     /// `&self` must be a reference pointing to a heap allocated [`UafDetector`] (e.g. a `Box<UafDetector>`).
     pub unsafe fn try_id_byref(&self, key: UafDetectorKey) -> Option<usize> {
-        // SAFETY: self is guaranteed to be heap allocated, since the only way to get a `UafDetector` outside of this module is
-        // using the
+        // SAFETY: caller guarantees that self is heap allocated.
         let prefix_ref =
             unsafe { UafDetectorSupportingAllocator::uaf_detector_get_prefix_ref_byref(self) };
 
@@ -384,6 +383,7 @@ impl UafDetector {
     ///
     /// `&self` must be a reference pointing to a heap allocated [`UafDetector`] (e.g. a `Box<UafDetector>`).
     pub unsafe fn id_byref(&self, key: UafDetectorKey) -> usize {
+        // SAFETY: caller guarantees that self is heap allocated.
         let id_opt = unsafe { self.try_id_byref(key) };
         id_opt.expect("detected use after free")
     }
