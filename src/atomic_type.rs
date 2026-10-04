@@ -42,29 +42,29 @@ impl<T: HasAtomicType> std::fmt::Debug for Atomic<T> {
 unsafe impl<T: HasAtomicType> Sync for Atomic<T> {}
 
 macro_rules! impl_atomic_type {
-    {$int_ty: ty} => {
+    {$int_ty: ty, $atomic_ty: ty} => {
         #[allow(unused)]
         impl Atomic<$int_ty> {
             fn_const_if_not_loom! {
                 /// creates a new atomic variable with the given initial value.
                 pub const fn new(initial_value: $int_ty) -> Self {
                     Self {
-                        inner: RawAtomic::<$int_ty>::new(initial_value),
+                        inner: <$atomic_ty>::new(initial_value),
                     }
                 }
             }
 
-            /// see [`AtomicUsize::load`].
+            #[doc = concat!("see [`", stringify!($atomic_ty), "::load`].")]
             pub fn load(&self, ordering: atomic::Ordering) -> $int_ty {
                 self.inner.load(ordering)
             }
 
-            /// see [`AtomicUsize::store`].
+            #[doc = concat!("see [`", stringify!($atomic_ty), "::store`].")]
             pub fn store(&self, new_value: $int_ty, ordering: atomic::Ordering){
                 self.inner.store(new_value, ordering)
             }
 
-            /// see [`AtomicUsize::try_update`].
+            #[doc = concat!("see [`", stringify!($atomic_ty), "::try_update`].")]
             pub fn try_update(
                 &self,
                 set_order: atomic::Ordering,
@@ -81,17 +81,17 @@ macro_rules! impl_atomic_type {
                 }
             }
 
-            /// see [`AtomicUsize::fetch_and`].
+            #[doc = concat!("see [`", stringify!($atomic_ty), "::fetch_and`].")]
             pub fn fetch_and(&self, val: $int_ty, order: atomic::Ordering) -> $int_ty {
                 self.inner.fetch_and(val, order)
             }
 
-            /// see [`AtomicUsize::fetch_or`].
+            #[doc = concat!("see [`", stringify!($atomic_ty), "::fetch_or`].")]
             pub fn fetch_or(&self, val: $int_ty, order: atomic::Ordering) -> $int_ty {
                 self.inner.fetch_or(val, order)
             }
 
-            /// see [`AtomicUsize::compare_exchange`].
+            #[doc = concat!("see [`", stringify!($atomic_ty), "::compare_exchange`].")]
             pub fn compare_exchange(&self,
                 current: $int_ty,
                 new: $int_ty,
@@ -103,6 +103,6 @@ macro_rules! impl_atomic_type {
         }
     };
 }
-impl_atomic_type! {u8}
-impl_atomic_type! {u16}
-impl_atomic_type! {u32}
+impl_atomic_type! {u8, AtomicU8}
+impl_atomic_type! {u16, AtomicU16}
+impl_atomic_type! {u32, AtomicU32}
