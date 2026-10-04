@@ -29,11 +29,11 @@ pub struct Notify {
     /// that it is not in the waiters list, you can safely access it without this lock.
     lock: crate::loom::parking_lot::Mutex<()>,
 
-    /// the head of the list of all current waiters that registered for wake up one the notify object is notified.
+    /// the head of the list of all current waiters that registered for wake up once the notify object is notified.
     /// the list, including all data contained in all slots contained in it, is protected by the lock.
     waiters_list_head: UnsafeCell<Next>,
 
-    /// the number of currently active active waiters.
+    /// the number of currently active waiters.
     /// note that this is greater than or equal to the number of waiters in the list, since some waiters may not yet be
     /// in the list since haven't been polled yet.
     num_active_waiters: AtomicUsize,
@@ -80,7 +80,7 @@ impl Notify {
 
     /// notifies all currently registered waiters, other than the waiters which were registered by the current thread.
     ///
-    /// note that this may still case a notifier on the current thread to wake up, but it will not explicitly wake its task's
+    /// note that this may still cause a notifier on the current thread to wake up, but it will not explicitly wake its task's
     /// waker. if that waiter will later be polled for some other reason, it will finish its wait due to this notify calls, but
     /// this notify call will not explicitly cause it to wake up if it is currently blocking.
     ///
@@ -163,7 +163,7 @@ impl Notify {
                 // avoid having the current thread wake itself up.
                 // this protection helps deal with a quirk in the rcu implementation, where we notify some notification object whenever a thread
                 // parks itself, but without this protection, as soon as a thread would start waiting for a notification and park itself, the park
-                // operation would wake himself up due to login in our on park hook, making the thread unable to actually wait for a notification,
+                // operation would wake himself up due to logic in our on park hook, making the thread unable to actually wait for a notification,
                 // instead being stuck in a constant loop of trying to park and then immediately waking up.
                 let skip =
                     cur_thread_id.is_some_and(|id| cur_slot.thread_id.get_const_ptr().read() == id);

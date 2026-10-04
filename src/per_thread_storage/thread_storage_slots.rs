@@ -62,7 +62,7 @@ pub struct ThreadStorageSlots {
 
     /// a lock protecting the current data.
     /// it is provided as an external lock instead of wrapping the cur data directly, since the cur data is also protected from writes
-    /// by writing the write lock. doing it separately allow us to access the inner data in such scenarios without having to lock this
+    /// by locking the write lock. doing it separately allow us to access the inner data in such scenarios without having to lock this
     /// lock when it is not needed.
     ///
     /// we use parking lot's rwlock since it is fair. we need fairness here, otherwise the readers will starve writers forever, and threads
@@ -153,7 +153,7 @@ impl ThreadStorageSlots {
 
     /// allocates a new storage slot for some thread, given the thread's initial state.
     ///
-    /// the selected slot's transition from being vacant to being vacant immediately sets its state to the provided state.
+    /// the selected slot's transition from being vacant to being occupied immediately sets its state to the provided state.
     /// there is not "allocated but uninitialized" state. as soon as the slot is allocated, it is also initialized to the given
     /// initial state.
     ///

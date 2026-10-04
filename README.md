@@ -19,7 +19,7 @@ by the [`RcuBox`] type.
 NOTE: this section specifically refers to [`RcuBox`], the main high level abstraction provided by this crate, but will probably also
 apply to most other abstractions which can be implemented using the rcu primitive.
 
-this crate is speicifcally useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
+this crate is specifically useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
 when a reader reads the data stored in an rcu box (e.g. using [`RcuBox::read`]), the read operation is only a single load of an atomic
 pointer. that's it. no branches, no book-keeping, just a single pointer load. it is basically the fastest a read can get.
 
@@ -38,7 +38,7 @@ writing to it, but this is mostly negligible.
 this consistency of the read operation can be very important in latency-critical applications which require a high-performance
 fast path with predictable latency.
 
-also see [benchmnarks](#benchmarks).
+also see [benchmarks](#benchmarks).
 
 ## quick start
 
@@ -114,7 +114,7 @@ enabling rcu for a tokio runtime does introduce a little bit of overhead.
 
 specifically, this crate uses tokio hooks (e.g. [`on_after_task_poll`]) to track quiescent states of tokio's worker threads.
 
-but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
+but, this crate makes a significant effort to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
 which are called very often.
 
 for example, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic loads and stores,
