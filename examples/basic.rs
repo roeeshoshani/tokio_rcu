@@ -8,7 +8,7 @@ struct SharedState {
 }
 impl SharedState {
     fn contains_user(&self, username: &str) -> bool {
-        self.users.iter().find(|x| *x == username).is_some()
+        self.users.iter().any(|x| *x == username)
     }
 }
 

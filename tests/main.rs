@@ -129,9 +129,9 @@ fn stress_no_uaf_with_sleeps() {
     const SHORT_SLEEP_DURATION: Duration = Duration::from_millis(10);
 
     let rt = unsafe {
-        // SAFETY: we use `rcu_block_on`
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            // SAFETY: we use `rcu_block_on`
             .enable_rcu()
             .worker_threads(
                 // make sure that we have 1 worker thread per task, so that when a task sleeps the entire thread goes to sleep
@@ -142,82 +142,84 @@ fn stress_no_uaf_with_sleeps() {
             .unwrap()
     };
 
-    unsafe {
-        // SAFETY: we called `enable_rcu`
-        rt.rcu_block_on(async {
-            let initial_string = "<VALID> initial string";
-            let final_string = "<VALID> final string";
+    let main_future = async {
+        let initial_string = "<VALID> initial string";
+        let final_string = "<VALID> final string";
 
-            let data = Arc::new(RcuBox::new(Box::new(String::from(initial_string))));
-            let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
-                .map(|_| {
-                    tokio::spawn({
-                        let data = data.clone();
-                        async move {
-                            loop {
-                                // extra scope to scope the rcu read guard
-                                {
-                                    // SAFETY: guard is scoped and dropped before the next await point
-                                    let value = data.read();
+        let data = Arc::new(RcuBox::new(Box::new(String::from(initial_string))));
+        let reader_tasks: Vec<_> = (0..NUM_READER_TASKS)
+            .map(|_| {
+                tokio::spawn({
+                    let data = data.clone();
+                    async move {
+                        loop {
+                            // extra scope to scope the rcu read guard
+                            {
+                                // SAFETY: guard is scoped and dropped before the next await point
+                                let value = unsafe { data.read() };
 
-                                    let orig_value: String = black_box(black_box(&*value).clone());
+                                let orig_value: String = black_box(black_box(&*value).clone());
 
-                                    // make sure that the string is one of the valid options.
-                                    // the writers overwrite the data of old strings with invalid contents, so that if we happen
-                                    // to see any such freed pointer, we will detect the invalid contents and fail the test.
-                                    assert!(orig_value.starts_with("<VALID>"));
+                                // make sure that the string is one of the valid options.
+                                // the writers overwrite the data of old strings with invalid contents, so that if we happen
+                                // to see any such freed pointer, we will detect the invalid contents and fail the test.
+                                assert!(orig_value.starts_with("<VALID>"));
 
-                                    // use the value for a while to try to trigger some UAFs.
-                                    for _ in 0..READER_NUM_CLONES {
-                                        let cloned_value = black_box(black_box(&*value).clone());
+                                // use the value for a while to try to trigger some UAFs.
+                                for _ in 0..READER_NUM_CLONES {
+                                    let cloned_value = black_box(black_box(&*value).clone());
 
-                                        // the same guard should always yield the same data.
-                                        assert_eq!(orig_value, cloned_value);
-                                    }
-
-                                    if *value == final_string {
-                                        break;
-                                    }
+                                    // the same guard should always yield the same data.
+                                    assert_eq!(orig_value, cloned_value);
                                 }
 
-                                tokio::time::sleep(SHORT_SLEEP_DURATION).await;
+                                if *value == final_string {
+                                    break;
+                                }
                             }
+
+                            tokio::time::sleep(SHORT_SLEEP_DURATION).await;
                         }
-                    })
+                    }
                 })
-                .collect();
-            let writer_tasks: Vec<_> = (0..NUM_WRITER_TASKS)
-                .map(|writer_id| {
-                    tokio::spawn({
-                        let data = data.clone();
-                        async move {
-                            for i in 0..WRITER_NUM_WRITES {
-                                let new_string =
-                                    format!("<VALID> hello from worker {} {}", writer_id, i);
-                                let old_str = data.swap(Box::new(new_string)).await;
+            })
+            .collect();
+        let writer_tasks: Vec<_> = (0..NUM_WRITER_TASKS)
+            .map(|writer_id| {
+                tokio::spawn({
+                    let data = data.clone();
+                    async move {
+                        for i in 0..WRITER_NUM_WRITES {
+                            let new_string =
+                                format!("<VALID> hello from worker {} {}", writer_id, i);
+                            let old_str = data.swap(Box::new(new_string)).await;
 
-                                // overwrite the memory of the old string with some invalid data, so that if any reader happens
-                                // to read it, he will detect that it is invalid and fail the test.
-                                let mut old_str_bytes = old_str.into_bytes();
-                                old_str_bytes.fill(b'A');
+                            // overwrite the memory of the old string with some invalid data, so that if any reader happens
+                            // to read it, he will detect that it is invalid and fail the test.
+                            let mut old_str_bytes = old_str.into_bytes();
+                            old_str_bytes.fill(b'A');
 
-                                tokio::time::sleep(SHORT_SLEEP_DURATION).await;
-                            }
+                            tokio::time::sleep(SHORT_SLEEP_DURATION).await;
                         }
-                    })
+                    }
                 })
-                .collect();
+            })
+            .collect();
 
-            for task in writer_tasks {
-                task.await.unwrap();
-            }
+        for task in writer_tasks {
+            task.await.unwrap();
+        }
 
-            let _ = data.swap(Box::new(String::from(final_string))).await;
+        let _ = data.swap(Box::new(String::from(final_string))).await;
 
-            for task in reader_tasks {
-                task.await.unwrap();
-            }
-        })
+        for task in reader_tasks {
+            task.await.unwrap();
+        }
+    };
+
+    unsafe {
+        // SAFETY: we called `enable_rcu`
+        rt.rcu_block_on(main_future)
     }
 }
 
@@ -227,9 +229,9 @@ fn stress_no_uaf_with_sleeps() {
 #[cfg(not(miri))]
 fn enable_rcu_multiple_calls() {
     let rt = unsafe {
-        // SAFETY: we use `rcu_block_on`
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            // SAFETY: we use `rcu_block_on`
             // call `enable_rcu` multiple times
             .enable_rcu()
             .enable_rcu()
@@ -237,29 +239,30 @@ fn enable_rcu_multiple_calls() {
             .build()
             .unwrap()
     };
-    unsafe {
-        // SAFETY: we called `enable_rcu`
-        rt.rcu_block_on(async move {
-            let state = Arc::new(RcuBox::new(Box::new(String::from(
-                "some interesting string",
-            ))));
-            let reader = tokio::spawn({
-                let state = state.clone();
-                async move {
-                    loop {
-                        // SAFETY: guard is scoped and dropped before the next await point
-                        let value = state.read();
-                        if *value == "done" {
-                            break;
-                        }
+    let main_future = async move {
+        let state = Arc::new(RcuBox::new(Box::new(String::from(
+            "some interesting string",
+        ))));
+        let reader = tokio::spawn({
+            let state = state.clone();
+            async move {
+                loop {
+                    // SAFETY: guard is scoped and dropped before the next await point
+                    let value = unsafe { state.read() };
+                    if *value == "done" {
+                        break;
                     }
                 }
-            });
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            let old_string = state.swap(Box::new(String::from("done"))).await;
-            assert_eq!(*old_string, "some interesting string");
-            reader.await.unwrap();
+            }
         });
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let old_string = state.swap(Box::new(String::from("done"))).await;
+        assert_eq!(*old_string, "some interesting string");
+        reader.await.unwrap();
+    };
+    unsafe {
+        // SAFETY: we called `enable_rcu`
+        rt.rcu_block_on(main_future);
     }
 }
 
@@ -269,18 +272,18 @@ fn enable_rcu_multiple_calls() {
 #[cfg(not(miri))]
 fn enable_rcu_multiple_runtimes() {
     let rt1 = unsafe {
-        // SAFETY: we use `rcu_block_on`
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            // SAFETY: we use `rcu_block_on`
             .enable_rcu()
             .build()
             .unwrap()
     };
 
     let rt2 = unsafe {
-        // SAFETY: we use `rcu_block_on`
         tokio::runtime::Builder::new_multi_thread()
             .enable_all()
+            // SAFETY: we use `rcu_block_on`
             .enable_rcu()
             .build()
             .unwrap()

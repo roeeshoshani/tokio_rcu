@@ -15,7 +15,7 @@
 //! NOTE: this section specifically refers to [`RcuBox`], the main high level abstraction provided by this crate, but will probably also
 //! apply to most other abstractions which can be implemented using the rcu primitive.
 //!
-//! this crate is speicifcally useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
+//! this crate is specifically useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
 //! when a reader reads the data stored in an rcu box (e.g. using [`RcuBox::read`]), the read operation is only a single load of an atomic
 //! pointer. that's it. no branches, no book-keeping, just a single pointer load. it is basically the fastest a read can get.
 //!
@@ -34,7 +34,7 @@
 //! this consistency of the read operation can be very important in latency-critical applications which require a high-performance
 //! fast path with predictable latency.
 //!
-//! also see [benchmnarks](#benchmarks).
+//! also see [benchmarks](#benchmarks).
 //!
 //! # quick start
 //!
@@ -110,7 +110,7 @@
 //!
 //! specifically, this crate uses tokio hooks (e.g. [`on_after_task_poll`]) to track quiescent states of tokio's worker threads.
 //!
-//! but, this crate performs a lot of efforts to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
+//! but, this crate makes a significant effort to make this overhead as small as possible, especially in hooks like [`on_after_task_poll`]
 //! which are called very often.
 //!
 //! for example, the current implementation of the [`on_after_task_poll`] hook is basically just a couple of atomic loads and stores,
@@ -288,6 +288,7 @@ use crate::{
         thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
+    utils::{likely, unlikely},
 };
 
 mod atomic_type;
@@ -301,7 +302,6 @@ pub mod test_utils;
 mod thread_state;
 mod utils;
 
-use branches::{likely, unlikely};
 use tokio::runtime::RuntimeFlavor;
 
 static_or_loom_lazy_static! {
@@ -323,7 +323,7 @@ static_or_loom_lazy_static! {
     /// incrementing the epoch id.
     ///
     /// this also ensures that we don't start performing a reset operation while some incrementor thread is still waiting for threads to see
-    /// his incremented epoch id. if we were to start the reset while we was waiting, we would get stuck until the next overflow of the epoch
+    /// his incremented epoch id. if we were to start the reset while he was waiting, he would get stuck until the next overflow of the epoch
     /// id.
     static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
@@ -334,7 +334,7 @@ static_or_loom_lazy_static! {
     /// in practice, the reset is actually only performed by a single thread - the leader, and all other threads that entered reset just wait
     /// for him to finish resetting.
     ///
-    /// so, this notification used by the leader of a reset operation to notify all other threads that have also entered reset that the reset
+    /// so, this notification is used by the leader of a reset operation to notify all other threads that have also entered reset that the reset
     /// operation is done.
     static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
 }
@@ -361,12 +361,12 @@ fn post_epoch_id_modification_sc_fence() {
 
 /// wait for an RCU grace period.
 ///
-/// once this function returns, it is guaranteed that any rcu-protected piece of data data that was made unreachable (e.g. by swapping it with
+/// once this function returns, it is guaranteed that any rcu-protected piece of data that was made unreachable (e.g. by swapping it with
 /// another piece of data) before calling this function is now no longer used by any thread in the process, including the current thread.
 pub async fn synchronize_rcu() {
     // lock the reset sync lock for reading.
     //
-    // this ensures that if any reset operation is currently ongoing, we don't interrupt it by incremented the epoch id while it
+    // this ensures that if any reset operation is currently ongoing, we don't interrupt it by incrementing the epoch id while it
     // is being reset, and we instead wait for it to finish and only then go on with our increment.
     //
     // this exclusivity is guaranteed since during reset the leader of the reset locks the reset sync lock for writing.
@@ -428,7 +428,17 @@ pub async fn synchronize_rcu() {
                 let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write().await;
 
                 // reset the epoch id
-                epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
+                epoch_id_set(
+                    EPOCH_ID_MIN,
+                    // we don't need any ordering here. this is not yet part of the actual grace period, this is only meant
+                    // to reset the epoch id back to its minimum value.
+                    // the actually release store that is part of the grace period will be performed later, when incrementing
+                    // the post-reset epoch id.
+                    //
+                    // furthermore, we are more than fine with breaking the release sequence of the epoch id, since we are
+                    // currently the only one using it for any operation, due to the write lock of the reset sync lock.
+                    atomic::Ordering::Relaxed,
+                );
 
                 // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
                 // performs that SC fence for us.
@@ -507,10 +517,10 @@ pub async fn synchronize_rcu() {
     };
 }
 
-/// wait for all other threads in the process other than the current thread to see some epoch id as implemented in the given predicate
+/// wait for all threads in the process other than the current thread to see some epoch id as implemented in the given predicate
 /// which processes the last seen epoch id of each thread.
 ///
-/// this function does not take into account new threads just starting, nor new threads just existing the busy state.
+/// this function does not take into account new threads just starting, nor new threads just exiting the busy state.
 ///
 /// if `include_calling_thread` is set, this function also waits for the calling thread itself to see the updated epoch id as implemented
 /// in the given predicate. this is usually not needed and should be set to `false`. see [`synchronize_rcu`] for more info.
@@ -550,9 +560,9 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         // update the thread's state, and then call `notify`.
         // but, there might be a scenario where the quiescent states miss our `notified` registration so their `notify` call
         // does not wake us, but we miss their state update, so we go to sleep, causing a deadlock.
-        // this fence prevents that scenario from ever occurring, by making sure that either wee see the state update, or they
+        // this fence prevents that scenario from ever occurring, by making sure that either we see the state update, or they
         // see our `notified` registration. the case where we both miss each other is no longer possible.
-        atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        atomic::fence(atomic::Ordering::SeqCst);
 
         // we must re-calculate this every iteration since our task may be sent between threads every time we await the notified future.
         let this_thread_storage_slot_id = this_thread_get_storage_slot_id();
@@ -639,7 +649,7 @@ fn on_thread_stop() {
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
         // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
-        atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        atomic::fence(atomic::Ordering::SeqCst);
         THREAD_EPOCH_UPDATED_NOTIFY.notify();
     }
 }
@@ -696,7 +706,7 @@ fn on_thread_park() {
     //
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
     // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
-    atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    atomic::fence(atomic::Ordering::SeqCst);
     THREAD_EPOCH_UPDATED_NOTIFY.notify_except_current_thread();
 }
 
@@ -855,7 +865,7 @@ fn on_after_task_poll() {
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
         // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
-        atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        atomic::fence(atomic::Ordering::SeqCst);
         THREAD_EPOCH_UPDATED_NOTIFY.notify();
     }
 }
@@ -1022,7 +1032,10 @@ impl<F: Future> Future for RcuRootFuture<F> {
 /// do not use this unless you know what you are doing.
 #[cfg(loom)]
 pub mod loom_tests_api {
-    pub use crate::epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId};
+    pub use crate::{
+        epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId},
+        loom::std::sync::atomic,
+    };
 
     pub fn on_before_task_poll() {
         crate::on_before_task_poll();
@@ -1039,10 +1052,10 @@ pub mod loom_tests_api {
     pub fn on_after_task_poll() {
         crate::on_after_task_poll()
     }
-    pub fn epoch_id_set(new_value: EpochId, ordering: std::sync::atomic::Ordering) {
+    pub fn epoch_id_set(new_value: EpochId, ordering: atomic::Ordering) {
         crate::epoch::epoch_id_set(new_value, ordering);
     }
-    pub fn epoch_id_get(ordering: std::sync::atomic::Ordering) -> EpochId {
+    pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
         crate::epoch::epoch_id_get(ordering)
     }
 }

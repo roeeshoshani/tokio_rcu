@@ -1,8 +1,7 @@
 use crate::loom::{static_or_loom_lazy_static, std::sync::atomic};
 
-use branches::unlikely;
-
 use crate::atomic_type::Atomic;
+use crate::utils::unlikely;
 
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
 ///
@@ -84,7 +83,7 @@ pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
 /// before the increment of the epoch id whenever the epoch id is loaded with acquire ordering when the threads pass through a quiescent
 /// state.
 ///
-/// in the failure case, the increment may or many not happen, and if it does, it happens with release ordering.
+/// in the failure case, the increment may or may not happen, and if it does, it happens with release ordering.
 #[inline]
 pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
     match CUR_EPOCH_ID.try_update(

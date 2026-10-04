@@ -36,3 +36,24 @@ impl<T> PtrMutSendSync<T> {
 }
 unsafe impl<T: Send> Send for PtrMutSendSync<T> {}
 unsafe impl<T: Sync> Sync for PtrMutSendSync<T> {}
+
+/// a cold and empty function used to mark cold paths in code.
+#[cold]
+#[inline(always)]
+const fn cold_and_empty() {}
+
+/// given a condition, returns that same condition, but with a hint to the compiler that the condition is most likely true.
+pub const fn likely(cond: bool) -> bool {
+    if !cond {
+        cold_and_empty();
+    }
+    cond
+}
+
+/// given a condition, returns that same condition, but with a hint to the compiler that the condition is most likely false.
+pub const fn unlikely(cond: bool) -> bool {
+    if cond {
+        cold_and_empty();
+    }
+    cond
+}

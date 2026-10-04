@@ -302,7 +302,7 @@ const WRITE_WHILE_READING_BENCH_CFGS: &[WriteWhileReadingBenchCfg] = &[
 fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(RcuBox::new(Box::new(0)));
-        let writers: Vec<_> = (0..cfg.num_reader_tasks)
+        let writers: Vec<_> = (0..cfg.num_writer_tasks)
             .map({
                 let data = data.clone();
                 move |_| {
@@ -323,7 +323,7 @@ fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
             .collect();
 
         let should_readers_stop = Arc::new(AtomicBool::new(false));
-        let readers: Vec<_> = (0..cfg.num_writer_tasks)
+        let readers: Vec<_> = (0..cfg.num_reader_tasks)
             .map({
                 let data = data.clone();
                 let should_readers_stop = should_readers_stop.clone();
@@ -360,7 +360,7 @@ fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
 fn write_while_reading_arc_swap(cfg: WriteWhileReadingBenchCfg) {
     rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
-        let writers: Vec<_> = (0..cfg.num_reader_tasks)
+        let writers: Vec<_> = (0..cfg.num_writer_tasks)
             .map({
                 let data = data.clone();
                 move |_| {
@@ -381,7 +381,7 @@ fn write_while_reading_arc_swap(cfg: WriteWhileReadingBenchCfg) {
             .collect();
 
         let should_readers_stop = Arc::new(AtomicBool::new(false));
-        let readers: Vec<_> = (0..cfg.num_writer_tasks)
+        let readers: Vec<_> = (0..cfg.num_reader_tasks)
             .map({
                 let data = data.clone();
                 let should_readers_stop = should_readers_stop.clone();
