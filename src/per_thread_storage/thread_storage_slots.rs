@@ -57,19 +57,33 @@ struct CurDataLockMarker;
 /// rcu book-keeping.
 pub struct ThreadStorageSlots {
     /// the current data buffer.
-    /// protected by both the cur data lock and the write lock.
+    ///
+    /// externally protected by both the cur data lock and the write lock.
+    ///
+    /// this field is used as a raw [`UnsafeCell`] instead of being protected directly since it has specific semantics with
+    /// the external locks which can't be modeled by wrapping it directly.
+    ///
+    /// to write to this field, you must first lock the write lock, and then lock the cur data lock for writing.
+    ///
+    /// the write lock provides more of a higher level lock to serialize the whole write operation with concurrent writers,
+    /// and the cur data lock synchronizes the current writer with concurrent readers. the cur data lock is only locked for
+    /// writing in the specific phase of the write operation where the cur data is swapped, but throughout the rest of the write
+    /// operation, only the write lock is held.
+    ///
+    /// readers of this field only need to lock the cur data lock for reading.
+    ///
+    /// when a writer has the write lock locked, it is guaranteed that the data will not be written to, so this data can be read
+    /// even while only holding the write lock, without locking the cur data lock at all.
     cur_data: UnsafeCell<ThreadStorageSlotsCurData>,
 
     /// a lock protecting the current data.
-    /// it is provided as an external lock instead of wrapping the cur data directly, since the cur data is also protected from writes
-    /// by locking the write lock. doing it separately allow us to access the inner data in such scenarios without having to lock this
-    /// lock when it is not needed.
     ///
-    /// we use parking lot's rwlock since it is fair. we need fairness here, otherwise the readers will starve writers forever, and threads
-    /// wanting to allocate new slots may just block forever.
+    /// see [`cur_data`](Self::cur_data) for more info.
     cur_data_lock: crate::loom::parking_lot::RwLock<CurDataLockMarker>,
 
     /// a lock which is used to make writers mutually exclusive, such that at any given moment, only one writer can work.
+    ///
+    /// see [`cur_data`](Self::cur_data) for more info.
     write_lock: crate::loom::std::sync::Mutex<WriteLockMarker>,
 
     /// indices of free slots.
