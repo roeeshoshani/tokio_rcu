@@ -1,6 +1,5 @@
 use std::{ops::Deref, ptr::NonNull};
 
-use branches::likely;
 use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
 
 use crate::{
@@ -11,6 +10,7 @@ use crate::{
     },
     per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlotValue},
     thread_state::{EncodedThreadState, ThreadState},
+    utils::likely,
 };
 
 /// all information needed to represent the "current data" of a thread storage slots instance.

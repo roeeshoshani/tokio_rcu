@@ -288,6 +288,7 @@ use crate::{
         thread_storage_slot_get_all,
     },
     thread_state::ThreadState,
+    utils::{likely, unlikely},
 };
 
 mod atomic_type;
@@ -301,7 +302,6 @@ pub mod test_utils;
 mod thread_state;
 mod utils;
 
-use branches::{likely, unlikely};
 use tokio::runtime::RuntimeFlavor;
 
 static_or_loom_lazy_static! {

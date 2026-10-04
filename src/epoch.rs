@@ -1,8 +1,7 @@
 use crate::loom::{static_or_loom_lazy_static, std::sync::atomic};
 
-use branches::unlikely;
-
 use crate::atomic_type::Atomic;
+use crate::utils::unlikely;
 
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
 ///
