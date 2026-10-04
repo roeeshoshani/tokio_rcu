@@ -428,7 +428,17 @@ pub async fn synchronize_rcu() {
                 let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write().await;
 
                 // reset the epoch id
-                epoch_id_set(EPOCH_ID_MIN, atomic::Ordering::Relaxed);
+                epoch_id_set(
+                    EPOCH_ID_MIN,
+                    // we don't need any ordering here. this is not yet part of the actual grace period, this is only meant
+                    // to reset the epoch id back to its minimum value.
+                    // the actualy release store that is part of the grace period will be performed later, when incrementing
+                    // the post-reset epoch id.
+                    //
+                    // furthermore, we are more than fine with breaking the release sequence of the epoch id, since we are
+                    // currently the only one using it for any operation, due to the write lock of the reset sync lock.
+                    atomic::Ordering::Relaxed,
+                );
 
                 // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
                 // performs that SC fence for us.
