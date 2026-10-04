@@ -347,6 +347,8 @@ impl<T> Drop for RcuBox<T> {
         );
 
         // SAFETY: pointers are always valid by the invariants of this type.
+        // furthermore, at this point we have a mutable reference to self, so no concurrent read guards could exist, and we
+        // have full ownership over the contained data, so we can safely free it without any grace period.
         let _ = unsafe { Box::from_raw(ptr) };
     }
 }
