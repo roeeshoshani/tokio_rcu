@@ -552,7 +552,7 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         // does not wake us, but we miss their state update, so we go to sleep, causing a deadlock.
         // this fence prevents that scenario from ever occurring, by making sure that either wee see the state update, or they
         // see our `notified` registration. the case where we both miss each other is no longer possible.
-        atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        atomic::fence(atomic::Ordering::SeqCst);
 
         // we must re-calculate this every iteration since our task may be sent between threads every time we await the notified future.
         let this_thread_storage_slot_id = this_thread_get_storage_slot_id();
@@ -639,7 +639,7 @@ fn on_thread_stop() {
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
         // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
-        atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        atomic::fence(atomic::Ordering::SeqCst);
         THREAD_EPOCH_UPDATED_NOTIFY.notify();
     }
 }
@@ -696,7 +696,7 @@ fn on_thread_park() {
     //
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
     // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
-    atomic::fence(std::sync::atomic::Ordering::SeqCst);
+    atomic::fence(atomic::Ordering::SeqCst);
     THREAD_EPOCH_UPDATED_NOTIFY.notify_except_current_thread();
 }
 
@@ -855,7 +855,7 @@ fn on_after_task_poll() {
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
         // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
-        atomic::fence(std::sync::atomic::Ordering::SeqCst);
+        atomic::fence(atomic::Ordering::SeqCst);
         THREAD_EPOCH_UPDATED_NOTIFY.notify();
     }
 }
@@ -1022,7 +1022,10 @@ impl<F: Future> Future for RcuRootFuture<F> {
 /// do not use this unless you know what you are doing.
 #[cfg(loom)]
 pub mod loom_tests_api {
-    pub use crate::epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId};
+    pub use crate::{
+        epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId},
+        loom::std::sync::atomic,
+    };
 
     pub fn on_before_task_poll() {
         crate::on_before_task_poll();
@@ -1039,10 +1042,10 @@ pub mod loom_tests_api {
     pub fn on_after_task_poll() {
         crate::on_after_task_poll()
     }
-    pub fn epoch_id_set(new_value: EpochId, ordering: std::sync::atomic::Ordering) {
+    pub fn epoch_id_set(new_value: EpochId, ordering: atomic::Ordering) {
         crate::epoch::epoch_id_set(new_value, ordering);
     }
-    pub fn epoch_id_get(ordering: std::sync::atomic::Ordering) -> EpochId {
+    pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
         crate::epoch::epoch_id_get(ordering)
     }
 }
