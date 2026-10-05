@@ -198,7 +198,7 @@ impl<T> RcuBox<T> {
     /// creates a new rcu box containing the given data.
     pub fn new(value: Box<T>) -> Self {
         Self {
-            value_ptr: AtomicPtr::new(Box::leak(value)),
+            value_ptr: AtomicPtr::new(Box::into_raw(value)),
         }
     }
 
@@ -302,7 +302,7 @@ impl<T> RcuBox<T> {
     /// swaps the current value with the new value, and returns a guard containing the old value, which can be owned after waiting
     /// for all previous users of that old value to finish using it.
     pub fn swap_nowait(&self, new_value: Box<T>) -> RcuBoxOldData<T> {
-        let new_value_ptr = Box::leak(new_value);
+        let new_value_ptr = Box::into_raw(new_value);
 
         let old_value_ptr = self.value_ptr.swap(
             new_value_ptr,
