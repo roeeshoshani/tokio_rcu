@@ -46,7 +46,10 @@ see also [benchmarks](#benchmarks).
 ## quick start
 
 ```rust
-use tokio_rcu::{rcu_block_on, rcu_read_lock, primitives::rcu_box::RcuBox};
+use tokio_rcu::{
+    primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable},
+    rcu_block_on, rcu_read_lock,
+};
 
 fn main() {
     rcu_block_on(async move {
@@ -62,7 +65,7 @@ fn main() {
         // the rcu box's data can be modified while readers are using it.
         // and, the old allocation is returned.
         let new_numbers = Box::new(vec![5, 6, 7, 8]);
-        let _old_numbers: Box<Vec<i32>> = numbers.swap(new_numbers).await;
+        let _old_numbers: Box<Vec<i32>> = numbers.swap(new_numbers).wait().await;
 
         rcu_read_lock(|guard| {
             let numbers = numbers.read(guard);

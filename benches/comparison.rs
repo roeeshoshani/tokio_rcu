@@ -8,7 +8,11 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use tokio_rcu::{RcuReadLockGuard, primitives::rcu_box::RcuBox, rcu_block_on};
+use tokio_rcu::{
+    RcuReadLockGuard,
+    primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable},
+    rcu_block_on,
+};
 
 fn main() {
     divan::main();
@@ -166,7 +170,7 @@ fn read_while_writing_rcu_box(cfg: ReadWhileWritingBenchCfg) {
                         async move {
                             let mut cur_owned_data = Box::new(0);
                             while !should_writers_stop.load(atomic::Ordering::Relaxed) {
-                                cur_owned_data = data.swap(cur_owned_data).await;
+                                cur_owned_data = data.swap(cur_owned_data).wait().await;
                                 tokio::task::yield_now().await;
                             }
                         }
@@ -318,7 +322,7 @@ fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
                             let mut cur_owned_data = Box::new(0);
                             for _ in 0..NUM_WRITE_ITERATIONS {
                                 for _ in 0..NUM_WRITES_PER_ITERATION {
-                                    cur_owned_data = data.swap(cur_owned_data).await;
+                                    cur_owned_data = data.swap(cur_owned_data).wait().await;
                                 }
                                 tokio::task::yield_now().await;
                             }

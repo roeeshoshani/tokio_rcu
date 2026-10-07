@@ -2,7 +2,11 @@
 
 use std::{pin::pin, task::Poll};
 
-use tokio_rcu::{RcuReadLockGuard, primitives::rcu_box::RcuBox, rcu_read_lock, synchronize_rcu};
+use tokio_rcu::{
+    RcuReadLockGuard,
+    primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable},
+    rcu_read_lock, synchronize_rcu,
+};
 
 use crate::{loom_waker::LoomWaker, uaf_detector::UafDetector};
 
@@ -80,7 +84,7 @@ fn read_and_write() {
             let writer = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
-                    let prev = busy_block_on_future(state.swap(uaf_detector1));
+                    let prev = busy_block_on_future(state.swap(uaf_detector1).wait());
                     assert_eq!(prev.id(uaf_detector0_key), 0);
                 }
             });
@@ -304,7 +308,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
             let writer = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
-                    let prev = busy_block_on_future(state.swap(uaf_detector1));
+                    let prev = busy_block_on_future(state.swap(uaf_detector1).wait());
                     assert_eq!(prev.id(uaf_detector0_key), 0);
                 }
             });
@@ -387,7 +391,7 @@ fn read_and_write_with_reset() {
             let writer = thread_spawn_with_hooks({
                 let state = state.clone();
                 move || {
-                    let prev = busy_block_on_future(state.swap(uaf_detector1));
+                    let prev = busy_block_on_future(state.swap(uaf_detector1).wait());
                     assert_eq!(prev.id(uaf_detector0_key), 0);
                 }
             });
