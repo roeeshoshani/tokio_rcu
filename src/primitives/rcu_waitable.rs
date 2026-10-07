@@ -1,4 +1,7 @@
 //! abstractions over values which require waiting an rcu grace period for them to be transformed into their output values.
+//!
+//! the main trait provided by this module is the [`RcuWaitable`] trait, which represents an object which requires waiting an rcu grace period for
+//! it to be transformed into its output value.
 
 use std::task::Poll;
 
@@ -9,17 +12,17 @@ use crate::synchronize_rcu;
 /// for example, this may represent the old pointer of a swapped rcu pointer, which requires waiting an rcu grace period in order for it to be
 /// reclaimed.
 ///
-/// rcu waitable values can be waited for by doing [`.wait().await`](Self::wait) on them.
+/// rcu waitable values can be waited for using the [`wait`](Self::wait) function.
 ///
-/// note that this trait is automatically implemented for tuples in which all the items implement `RcuWaitable`. this allows performing batch wait
-/// operations to wait for multiple [`RcuWaitable`] objects using only a single rcu grace period.
+/// note that this trait is automatically implemented for tuples in which all the items implement [`RcuWaitable`]. this allows performing batch wait
+/// operations to wait for multiple [`RcuWaitable`] objects using only a single rcu grace period. see [`wait`](Self::wait) for more info.
 pub trait RcuWaitable: Sized {
     /// the output value that will be produced after waiting the rcu grace period on this source value.
     type Output;
 
     /// transforms this source value into its output value, assuming that an rcu grace period has been waited for since this source value was created.
     ///
-    /// this function should normally not be used directly, you should use the safe [`rcu_wait_for`] function instead.
+    /// this function should normally not be used directly, you should use the safe [`wait`](Self::wait) function instead.
     ///
     /// # Safety
     ///
@@ -32,8 +35,40 @@ pub trait RcuWaitable: Sized {
     /// trait methods does not allow providing `Send` and `Sync` guarantees on the returned future, while using a named type allows it to automatically
     /// be deduced based on whether self is `Send` and `Sync`.
     ///
-    /// note that this function can be used to wait for multiple [`RcuWaitable`] objects at once while only performing a single rcu grace period by
-    /// combining them into a tuple and then calling [`wait`](Self::wait) on the entire tuple (e.g. `(a, b, c).wait().await`).
+    /// # example
+    ///
+    /// ```rust
+    /// # use tokio_rcu::{rcu_block_on, primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable}};
+    /// # rcu_block_on(async {
+    /// let value = RcuBox::new(Box::new(vec![1, 2, 3]));
+    /// let old_data = value.swap(Box::new(vec![4, 88, 12, 59, 33])).wait().await;
+    /// assert_eq!(*old_data, vec![1, 2, 3]);
+    /// # })
+    /// ```
+    ///
+    /// # combined wait
+    ///
+    /// this function can be used to wait for multiple [`RcuWaitable`] objects at once while only performing a single rcu grace period.
+    /// this can be achieved by combining them into a tuple and then calling [`wait`](Self::wait) on the entire tuple.
+    ///
+    /// ```rust
+    /// # use tokio_rcu::{rcu_block_on, primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable}};
+    /// # rcu_block_on(async {
+    /// let rcu_a = RcuBox::new(Box::new("a"));
+    /// let rcu_b = RcuBox::new(Box::new(vec![1, 2, 3]));
+    /// let rcu_c = RcuBox::new(Box::new(78));
+    ///
+    /// let (old_a, old_b, old_c) = (
+    ///     rcu_a.swap(Box::new("aaaa")),
+    ///     rcu_b.swap(Box::new(vec![4, 88, 12, 59, 33])),
+    ///     rcu_c.swap(Box::new(9120))
+    /// ).wait().await;
+    ///
+    /// assert_eq!(*old_a, "a");
+    /// assert_eq!(*old_b, vec![1, 2, 3]);
+    /// assert_eq!(*old_c, 78);
+    /// # })
+    /// ```
     ///
     /// # cancellation safety
     ///
