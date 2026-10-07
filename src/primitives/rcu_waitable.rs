@@ -78,3 +78,39 @@ pub async fn rcu_wait_for<T: RcuWaitable>(value: T) -> T::Output {
     // SAFETY: we waited an rcu grace period, so the value can now be transformed
     unsafe { value.into_output() }
 }
+
+/// a helper macro used to implement the [`RcuWaitable`] for tuples made of types that all implement [`RcuWaitable`], so that you can perform a single
+/// grace period while transforming multiple [`RcuWaitable`] objects into their outputs at once.
+macro_rules! impl_rcu_waitable_for_tuple {
+    { $(($index: tt, $t: ident)),+ } => {
+        impl<$($t: RcuWaitable),+> RcuWaitable for ($($t),+) {
+            type Output = ($(<$t as RcuWaitable>::Output),+);
+
+            unsafe fn into_output(self) -> Self::Output {
+                (
+                    $(
+                        // SAFETY: caller guarantees that a grace period has been waited for
+                        unsafe { self.$index.into_output() }
+                    ),+
+                )
+            }
+        }
+    };
+}
+impl_rcu_waitable_for_tuple! { (0, A), (1, B) }
+impl_rcu_waitable_for_tuple! { (0, A), (1, B), (2, C) }
+impl_rcu_waitable_for_tuple! { (0, A), (1, B), (2, C), (3, D) }
+impl_rcu_waitable_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E) }
+impl_rcu_waitable_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F) }
+impl_rcu_waitable_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G) }
+impl_rcu_waitable_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H) }
+impl_rcu_waitable_for_tuple! { (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I) }
+impl_rcu_waitable_for_tuple! {
+    (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J)
+}
+impl_rcu_waitable_for_tuple! {
+    (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J), (10, K)
+}
+impl_rcu_waitable_for_tuple! {
+    (0, A), (1, B), (2, C), (3, D), (4, E), (5, F), (6, G), (7, H), (8, I), (9, J), (10, K), (11, L)
+}
