@@ -41,7 +41,7 @@
 //! # quick start
 //!
 //! ```rust
-//! use tokio_rcu::{rcu_block_on, rcu_read_lock, rcu_box::RcuBox};
+//! use tokio_rcu::{rcu_block_on, rcu_read_lock, primitives::rcu_box::RcuBox};
 //!
 //! fn main() {
 //!     rcu_block_on(async move {
@@ -274,13 +274,13 @@
 //! This project is licensed under the MIT license.
 //!
 //! [`on_after_task_poll`]: tokio::runtime::Builder::on_after_task_poll
-//! [`RcuBox`]: rcu_box::RcuBox
-//! [`RcuBox::read`]: rcu_box::RcuBox::read
+//! [`RcuBox`]: primitives::rcu_box::RcuBox
+//! [`RcuBox::read`]: primitives::rcu_box::RcuBox::read
 
 mod loom;
 #[cfg(loom)]
 pub mod loom_tests_api;
-pub mod rcu_box;
+pub mod primitives;
 mod rcu_core;
 #[doc(hidden)]
 pub mod test_utils;

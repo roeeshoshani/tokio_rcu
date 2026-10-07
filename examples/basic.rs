@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_rcu::{rcu_block_on, rcu_box::RcuBox, rcu_read_lock};
+use tokio_rcu::{primitives::rcu_box::RcuBox, rcu_block_on, rcu_read_lock};
 
 #[derive(Debug, Clone)]
 struct SharedState {

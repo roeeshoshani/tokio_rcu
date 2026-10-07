@@ -8,7 +8,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use tokio_rcu::{RcuReadLockGuard, rcu_block_on, rcu_box::RcuBox};
+use tokio_rcu::{RcuReadLockGuard, primitives::rcu_box::RcuBox, rcu_block_on};
 
 fn main() {
     divan::main();
