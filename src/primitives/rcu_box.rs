@@ -120,7 +120,7 @@ impl<T> Drop for RcuBoxOldData<T> {
 /// # example
 ///
 /// ```rust
-/// # use tokio_rcu::{rcu_block_on, rcu_box::{RcuBox, rcu_box_wait_multiple}};
+/// # use tokio_rcu::{rcu_block_on, primitives::rcu_box::{RcuBox, rcu_box_wait_multiple}};
 /// # rcu_block_on(async {
 /// let rcu_a = RcuBox::new(Box::new("a"));
 /// let rcu_b = RcuBox::new(Box::new(vec![1, 2, 3]));

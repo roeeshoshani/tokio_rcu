@@ -2,7 +2,7 @@
 
 use std::{pin::pin, task::Poll};
 
-use tokio_rcu::{RcuReadLockGuard, rcu_box::RcuBox, rcu_read_lock, synchronize_rcu};
+use tokio_rcu::{RcuReadLockGuard, primitives::rcu_box::RcuBox, rcu_read_lock, synchronize_rcu};
 
 use crate::{loom_waker::LoomWaker, uaf_detector::UafDetector};
 

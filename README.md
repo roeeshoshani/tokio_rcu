@@ -12,14 +12,15 @@ the core primitives provided by this crate are [`synchronize_rcu`](https://docs.
 side critical section.
 
 the low level [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html) primitive, combined with the [`rcu_read_lock`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/rcu_read_lock/fn.rcu_read_lock.html) primitive, can be used to build a bunch of higher level
-abstractions.
-one very simple abstraction - a single pointer to a heap-allocated piece of shared data (an "rcu box") - is implemented in this crate
-by the [`RcuBox`] type.
+primitives.
+all such primitives implemented in this crate are provided in the [`primitives`](https://docs.rs/tokio_rcu/latest/tokio_rcu/primitives/) module.
+for example, one very simple higher level primitive implemented by this crate is [`RcuBox`], which is an rcu protected pointer to a heap allocated
+piece of data, which can be concurrently read and swapped.
 
 ## performance
 
-NOTE: this section specifically refers to [`RcuBox`], the main high level abstraction provided by this crate, but will probably also
-apply to most other abstractions which can be implemented using the rcu primitive.
+NOTE: this section specifically refers to [`RcuBox`], but will probably also apply to most other abstractions which can be implemented
+using the rcu primitive.
 
 this crate is specifically useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
 when a reader reads the data stored in an rcu box (e.g. using [`RcuBox::read`]), the read operation is only a single load of an atomic
@@ -45,7 +46,7 @@ see also [benchmarks](#benchmarks).
 ## quick start
 
 ```rust
-use tokio_rcu::{rcu_block_on, rcu_read_lock, rcu_box::RcuBox};
+use tokio_rcu::{rcu_block_on, rcu_read_lock, primitives::rcu_box::RcuBox};
 
 fn main() {
     rcu_block_on(async move {
@@ -278,7 +279,7 @@ this crate is supported on every platform that is supported by tokio.
 This project is licensed under the MIT license.
 
 [`on_after_task_poll`]: https://docs.rs/tokio/latest/tokio/runtime/builder/struct.Builder.html#method.on_after_task_poll
-[`RcuBox`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_box/struct.RcuBox.html
-[`RcuBox::read`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_box/struct.RcuBox.html#method.read
+[`RcuBox`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/primitives/rcu_box/struct.RcuBox.html
+[`RcuBox::read`]: https://docs.rs/tokio_rcu/latest/tokio_rcu/primitives/rcu_box/struct.RcuBox.html#method.read
 
 <!-- cargo-rdme end -->

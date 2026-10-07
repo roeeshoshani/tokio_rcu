@@ -9,8 +9,8 @@ use std::{
 
 use tokio::sync::Notify;
 use tokio_rcu::{
-    RcuReadLockGuard, TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_box::RcuBox,
-    synchronize_rcu,
+    RcuReadLockGuard, TokioRuntimeBuilderExt, TokioRuntimeExt, primitives::rcu_box::RcuBox,
+    rcu_block_on, synchronize_rcu,
 };
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
