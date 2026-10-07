@@ -8,7 +8,7 @@ use std::{
 };
 
 use arc_swap::ArcSwap;
-use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
+use tokio_rcu::{RcuReadLockGuard, rcu_block_on, rcu_box::RcuBox};
 
 fn main() {
     divan::main();
@@ -32,8 +32,11 @@ fn read_only_rcu_box(num_tasks: usize) {
                     let data = data.clone();
                     async move {
                         for _ in 0..NUM_READ_ITERATIONS {
-                            for _ in 0..NUM_READS_PER_ITERATION {
-                                black_box(unsafe { data.read() });
+                            {
+                                let guard = unsafe { RcuReadLockGuard::new() };
+                                for _ in 0..NUM_READS_PER_ITERATION {
+                                    black_box(data.read(&guard));
+                                }
                             }
                             tokio::task::yield_now().await;
                         }
@@ -137,8 +140,11 @@ fn read_while_writing_rcu_box(cfg: ReadWhileWritingBenchCfg) {
                         let data = data.clone();
                         async move {
                             for _ in 0..NUM_READ_ITERATIONS {
-                                for _ in 0..NUM_READS_PER_ITERATION {
-                                    black_box(unsafe { data.read() });
+                                {
+                                    let guard = unsafe { RcuReadLockGuard::new() };
+                                    for _ in 0..NUM_READS_PER_ITERATION {
+                                        black_box(data.read(&guard));
+                                    }
                                 }
                                 tokio::task::yield_now().await;
                             }
@@ -333,8 +339,11 @@ fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
                         let should_readers_stop = should_readers_stop.clone();
                         async move {
                             while !should_readers_stop.load(atomic::Ordering::Relaxed) {
-                                for _ in 0..NUM_READS_PER_ITERATION {
-                                    black_box(unsafe { data.read() });
+                                {
+                                    let guard = unsafe { RcuReadLockGuard::new() };
+                                    for _ in 0..NUM_READS_PER_ITERATION {
+                                        black_box(data.read(&guard));
+                                    }
                                 }
                                 tokio::task::yield_now().await;
                             }

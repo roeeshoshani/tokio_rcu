@@ -9,7 +9,8 @@ use std::{
 
 use tokio::sync::Notify;
 use tokio_rcu::{
-    TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_box::RcuBox, synchronize_rcu,
+    RcuReadLockGuard, TokioRuntimeBuilderExt, TokioRuntimeExt, rcu_block_on, rcu_box::RcuBox,
+    synchronize_rcu,
 };
 
 /// a test which makes sure that we don't cause a UAF while stress reading and writing the rcu box.
@@ -44,7 +45,8 @@ fn stress_no_uaf() {
                             // extra scope to scope the rcu read guard
                             {
                                 // SAFETY: guard is scoped and dropped before the next await point
-                                let value = unsafe { data.read() };
+                                let guard = unsafe { RcuReadLockGuard::new() };
+                                let value = data.read(&guard);
 
                                 let orig_value: String = black_box(black_box(&*value).clone());
 
@@ -156,7 +158,8 @@ fn stress_no_uaf_with_sleeps() {
                             // extra scope to scope the rcu read guard
                             {
                                 // SAFETY: guard is scoped and dropped before the next await point
-                                let value = unsafe { data.read() };
+                                let guard = unsafe { RcuReadLockGuard::new() };
+                                let value = data.read(&guard);
 
                                 let orig_value: String = black_box(black_box(&*value).clone());
 
@@ -248,7 +251,8 @@ fn enable_rcu_multiple_calls() {
             async move {
                 loop {
                     // SAFETY: guard is scoped and dropped before the next await point
-                    let value = unsafe { state.read() };
+                    let guard = unsafe { RcuReadLockGuard::new() };
+                    let value = state.read(&guard);
                     if *value == "done" {
                         break;
                     }
@@ -298,7 +302,8 @@ fn enable_rcu_multiple_runtimes() {
             async move {
                 loop {
                     // SAFETY: guard is scoped and dropped before the next await point
-                    let value = unsafe { state.read() };
+                    let guard = unsafe { RcuReadLockGuard::new() };
+                    let value = state.read(&guard);
                     if *value == "done" {
                         break;
                     }
@@ -365,7 +370,8 @@ fn stress_double_buffering() {
                             // extra scope to scope the rcu read guard
                             {
                                 // SAFETY: guard is scoped and dropped before the next await point
-                                let value = unsafe { data.read() };
+                                let guard = unsafe { RcuReadLockGuard::new() };
+                                let value = data.read(&guard);
 
                                 let orig_value: Buffer = black_box(black_box(&*value).clone());
 

@@ -19,7 +19,7 @@ use crate::{is_rcu_tracked_thread, utils::PhantomUnsendUnsync};
 /// this type should generally not be used directly. you should instead use the safe [`rcu_read_lock`] API.
 ///
 /// [`is_rcu_tracked_thread`]: crate::is_rcu_tracked_thread
-#[derive(Debug, PartialEq, Eq, Hash)]
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RcuReadLockGuard {
     /// the guard must not be sent to other threads, otherwise it could be safely constructed on an rcu tracked thread, and then sent to a
     /// non rcu tracked thread, thus allowing non rcu tracked threads to read rcu protected data.

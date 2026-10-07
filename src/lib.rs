@@ -283,7 +283,10 @@ pub mod test_utils;
 mod tokio_ext;
 mod utils;
 
-pub use rcu_core::{is_rcu_tracked_thread, synchronize_rcu};
+pub use rcu_core::{
+    RcuReadLockGuard, is_rcu_tracked_thread, rcu_read_lock, rcu_read_lock_unchecked,
+    synchronize_rcu,
+};
 
 #[cfg(not(loom))]
 pub use tokio_ext::rcu_block_on;

@@ -6,6 +6,8 @@ mod per_thread_storage;
 mod rcu_read_lock;
 mod thread_state;
 
+pub use rcu_read_lock::{RcuReadLockGuard, rcu_read_lock, rcu_read_lock_unchecked};
+
 use crate::{
     loom::{static_or_loom_lazy_static, std::sync::atomic},
     rcu_core::{
