@@ -3,13 +3,13 @@ use std::{ops::Deref, ptr::NonNull};
 use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
 
 use crate::{
-    atomic_type::Atomic,
     loom::{
         UnsafeCell, fn_const_if_not_loom,
         std::sync::atomic::{self, AtomicUsize},
     },
     per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlotValue},
     thread_state::{EncodedThreadState, ThreadState},
+    utils::atomic_type::Atomic,
     utils::likely,
 };
 

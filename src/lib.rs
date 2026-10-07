@@ -276,7 +276,6 @@
 //! [`RcuBox`]: rcu_box::RcuBox
 //! [`RcuBox::read`]: rcu_box::RcuBox::read
 
-mod atomic_type;
 mod core;
 mod epoch;
 mod loom;
