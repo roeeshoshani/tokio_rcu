@@ -5,8 +5,8 @@
 use std::ops::Deref;
 
 use crate::{
+    core::is_rcu_tracked_thread,
     loom::std::sync::atomic::{self, AtomicPtr},
-    per_thread_storage::this_thread_does_have_allocated_storage_slot,
     synchronize_rcu,
     utils::{PhantomUnsend, PtrMutSendSync},
 };
@@ -224,8 +224,8 @@ impl<T> RcuBox<T> {
         F: FnOnce(&T) -> R,
     {
         assert!(
-            this_thread_does_have_allocated_storage_slot(),
-            "attempted to read an rcu box outside of an rcu-enabled tokio runtime"
+            is_rcu_tracked_thread(),
+            "attempted to read an rcu box in a non rcu tracked thread"
         );
 
         // SAFETY:

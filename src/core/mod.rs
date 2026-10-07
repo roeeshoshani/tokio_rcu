@@ -1,15 +1,22 @@
 //! the core rcu algorithm, including the logic of the different async runtime hooks, and the logic of waiting a grace period.
 
+pub(crate) mod epoch;
+mod notify;
+mod per_thread_storage;
+mod thread_state;
+
 use crate::{
-    epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
-    loom::{static_or_loom_lazy_static, std::sync::atomic},
-    notify::Notify,
-    per_thread_storage::{
-        this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
-        this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
-        thread_storage_slot_get_all,
+    core::{
+        epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
+        notify::Notify,
+        per_thread_storage::{
+            this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
+            this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
+            thread_storage_slot_get_all,
+        },
+        thread_state::ThreadState,
     },
-    thread_state::ThreadState,
+    loom::{static_or_loom_lazy_static, std::sync::atomic},
     utils::{likely, unlikely},
 };
 
@@ -577,4 +584,11 @@ pub fn on_after_task_poll() {
         atomic::fence(atomic::Ordering::SeqCst);
         THREAD_EPOCH_UPDATED_NOTIFY.notify();
     }
+}
+
+/// returns whether the calling thread is an rcu tracked thread.
+///
+/// rcu protected data may only be accessed on rcu tracked threads, since only tracked threads are waited for when waiting a grace period.
+pub fn is_rcu_tracked_thread() -> bool {
+    this_thread_does_have_allocated_storage_slot()
 }

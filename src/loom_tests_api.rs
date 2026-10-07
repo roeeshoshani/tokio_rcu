@@ -3,7 +3,7 @@
 //! do not use this unless you know what you are doing.
 
 pub use crate::{
-    epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId},
+    core::epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId},
     loom::std::sync::atomic,
 };
 
@@ -23,8 +23,8 @@ pub fn on_after_task_poll() {
     crate::core::on_after_task_poll()
 }
 pub fn epoch_id_set(new_value: EpochId, ordering: atomic::Ordering) {
-    crate::epoch::epoch_id_set(new_value, ordering);
+    crate::core::epoch::epoch_id_set(new_value, ordering);
 }
 pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
-    crate::epoch::epoch_id_get(ordering)
+    crate::core::epoch::epoch_id_get(ordering)
 }

@@ -277,20 +277,18 @@
 //! [`RcuBox::read`]: rcu_box::RcuBox::read
 
 mod core;
-mod epoch;
 mod loom;
 #[cfg(loom)]
 pub mod loom_tests_api;
-mod notify;
-mod per_thread_storage;
 pub mod rcu_box;
 #[doc(hidden)]
 pub mod test_utils;
-mod thread_state;
 mod tokio_ext;
 mod utils;
 
-pub use core::synchronize_rcu;
+pub use core::{is_rcu_tracked_thread, synchronize_rcu};
+
 #[cfg(not(loom))]
 pub use tokio_ext::rcu_block_on;
+
 pub use tokio_ext::{TokioRuntimeBuilderExt, TokioRuntimeExt};
