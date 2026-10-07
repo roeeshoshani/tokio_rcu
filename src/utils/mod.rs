@@ -1,5 +1,7 @@
 use std::marker::PhantomData;
 
+pub mod atomic_type;
+
 /// a phantom type which is not `Send`.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct PhantomUnsend {

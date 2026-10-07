@@ -3,13 +3,15 @@ use std::{ops::Deref, ptr::NonNull};
 use index_type::{IndexType, slice::TypedSlice, vec::TypedVec};
 
 use crate::{
-    atomic_type::Atomic,
     loom::{
         UnsafeCell, fn_const_if_not_loom,
         std::sync::atomic::{self, AtomicUsize},
     },
-    per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlotValue},
-    thread_state::{EncodedThreadState, ThreadState},
+    rcu_core::{
+        per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlotValue},
+        thread_state::{EncodedThreadState, ThreadState},
+    },
+    utils::atomic_type::Atomic,
     utils::likely,
 };
 
@@ -446,7 +448,7 @@ impl<'a> Deref for ThreadStorageSlotsReadGuard<'a> {
 mod tests {
     use crate::loom::std::sync::atomic;
 
-    use crate::{
+    use crate::rcu_core::{
         epoch::{EPOCH_ID_MIN, EpochId},
         per_thread_storage::{ThreadStorageSlotId, ThreadStorageSlots},
         thread_state::ThreadState,

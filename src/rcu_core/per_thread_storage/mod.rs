@@ -8,9 +8,9 @@ use std::num::NonZeroU16;
 use index_type::IndexType;
 
 use crate::{
-    atomic_type::Atomic,
     loom::{fn_const_if_not_loom, static_or_loom_lazy_static, std::cell::Cell},
-    thread_state::{EncodedThreadState, ThreadState},
+    rcu_core::thread_state::{EncodedThreadState, ThreadState},
+    utils::atomic_type::Atomic,
 };
 
 mod thread_storage_slots;
