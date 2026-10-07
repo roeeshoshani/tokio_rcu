@@ -8,14 +8,15 @@
 //! side critical section.
 //!
 //! the low level [`synchronize_rcu`] primitive, combined with the [`rcu_read_lock`] primitive, can be used to build a bunch of higher level
-//! abstractions.
-//! one very simple abstraction - a single pointer to a heap-allocated piece of shared data (an "rcu box") - is implemented in this crate
-//! by the [`RcuBox`] type.
+//! primitives.
+//! all such primitives implemented in this crate are provided in the [`primitives`] module.
+//! for example, one very simple higher level primitive implemented by this crate is [`RcuBox`], which is an rcu protected pointer to a heap allocated
+//! piece of data, which can be concurrently read and swapped.
 //!
 //! # performance
 //!
-//! NOTE: this section specifically refers to [`RcuBox`], the main high level abstraction provided by this crate, but will probably also
-//! apply to most other abstractions which can be implemented using the rcu primitive.
+//! NOTE: this section specifically refers to [`RcuBox`], but will probably also apply to most other abstractions which can be implemented
+//! using the rcu primitive.
 //!
 //! this crate is specifically useful for read-mostly data, as it makes readers extremely fast at the cost of making the writers slower.
 //! when a reader reads the data stored in an rcu box (e.g. using [`RcuBox::read`]), the read operation is only a single load of an atomic
