@@ -1,6 +1,9 @@
 use std::sync::Arc;
 
-use tokio_rcu::{primitives::rcu_box::RcuBox, rcu_block_on, rcu_read_lock};
+use tokio_rcu::{
+    primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable},
+    rcu_block_on, rcu_read_lock,
+};
 
 #[derive(Debug, Clone)]
 struct SharedState {
@@ -44,7 +47,7 @@ fn main() {
         cur_state.users.push("Bob".into());
 
         // point all readers to the new state, and get back the old state
-        let mut old_state = state.swap(Box::new(cur_state)).await;
+        let mut old_state = state.swap(Box::new(cur_state)).wait().await;
 
         // note that we can re-use the old state allocation.
         // but, note that it doesn't contain any changes performed to the new state.
@@ -52,7 +55,7 @@ fn main() {
         old_state.users.push("Alice".into());
 
         // point all readers back to the old allocation now that we updated it.
-        state.swap(old_state).await;
+        state.swap(old_state).wait().await;
 
         for task in readers {
             task.await.unwrap();

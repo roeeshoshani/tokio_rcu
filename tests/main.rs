@@ -9,7 +9,8 @@ use std::{
 
 use tokio::sync::Notify;
 use tokio_rcu::{
-    RcuReadLockGuard, TokioRuntimeBuilderExt, TokioRuntimeExt, primitives::rcu_box::RcuBox,
+    RcuReadLockGuard, TokioRuntimeBuilderExt, TokioRuntimeExt,
+    primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable},
     rcu_block_on, synchronize_rcu,
 };
 
@@ -82,7 +83,7 @@ fn stress_no_uaf() {
                         for i in 0..WRITER_NUM_WRITES {
                             let new_string =
                                 format!("<VALID> hello from worker {} {}", writer_id, i);
-                            let old_str = data.swap(Box::new(new_string)).await;
+                            let old_str = data.swap(Box::new(new_string)).wait().await;
 
                             // overwrite the memory of the old string with some invalid data, so that if any reader happens
                             // to read it, he will detect that it is invalid and fail the test.
@@ -100,7 +101,7 @@ fn stress_no_uaf() {
             task.await.unwrap();
         }
 
-        let _ = data.swap(Box::new(String::from(final_string))).await;
+        let _ = data.swap(Box::new(String::from(final_string))).wait().await;
 
         for task in reader_tasks {
             task.await.unwrap();
@@ -195,7 +196,7 @@ fn stress_no_uaf_with_sleeps() {
                         for i in 0..WRITER_NUM_WRITES {
                             let new_string =
                                 format!("<VALID> hello from worker {} {}", writer_id, i);
-                            let old_str = data.swap(Box::new(new_string)).await;
+                            let old_str = data.swap(Box::new(new_string)).wait().await;
 
                             // overwrite the memory of the old string with some invalid data, so that if any reader happens
                             // to read it, he will detect that it is invalid and fail the test.
@@ -213,7 +214,7 @@ fn stress_no_uaf_with_sleeps() {
             task.await.unwrap();
         }
 
-        let _ = data.swap(Box::new(String::from(final_string))).await;
+        let _ = data.swap(Box::new(String::from(final_string))).wait().await;
 
         for task in reader_tasks {
             task.await.unwrap();
@@ -260,7 +261,7 @@ fn enable_rcu_multiple_calls() {
             }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let old_string = state.swap(Box::new(String::from("done"))).await;
+        let old_string = state.swap(Box::new(String::from("done"))).wait().await;
         assert_eq!(*old_string, "some interesting string");
         reader.await.unwrap();
     };
@@ -311,7 +312,7 @@ fn enable_rcu_multiple_runtimes() {
             }
         });
         tokio::time::sleep(Duration::from_millis(100)).await;
-        let old_string = state.swap(Box::new(String::from("done"))).await;
+        let old_string = state.swap(Box::new(String::from("done"))).wait().await;
         assert_eq!(*old_string, "some interesting string");
         reader.await.unwrap();
     };
@@ -402,11 +403,11 @@ fn stress_double_buffering() {
         let mut cur_unused_buf = buf_b;
         for i in 0..WRITER_NUM_WRITES {
             cur_unused_buf.bytes.fill(i as u8);
-            cur_unused_buf = data.swap(cur_unused_buf).await;
+            cur_unused_buf = data.swap(cur_unused_buf).wait().await;
         }
 
         cur_unused_buf.should_readers_exit = true;
-        data.swap(cur_unused_buf).await;
+        data.swap(cur_unused_buf).wait().await;
 
         for task in reader_tasks {
             task.await.unwrap();
