@@ -9,7 +9,10 @@ use crate::synchronize_rcu;
 /// for example, this may represent the old pointer of a swapped rcu pointer, which requires waiting an rcu grace period in order for it to be
 /// reclaimed.
 ///
-/// rcu waitable values can be waited for using the [`rcu_wait_for`] function.
+/// rcu waitable values can be waited for by doing [`.wait().await`](Self::wait) on them.
+///
+/// note that this trait is automatically implemented for tuples in which all the items implement `RcuWaitable`. this allows performing batch wait
+/// operations to wait for multiple [`RcuWaitable`] objects using only a single rcu grace period.
 pub trait RcuWaitable: Sized {
     /// the output value that will be produced after waiting the rcu grace period on this source value.
     type Output;
@@ -28,6 +31,9 @@ pub trait RcuWaitable: Sized {
     /// this function is semantically equivalent to `async fn wait(self) -> T::Output`, but a custom future is used instead since using `async fn` in
     /// trait methods does not allow providing `Send` and `Sync` guarantees on the returned future, while using a named type allows it to automatically
     /// be deduced based on whether self is `Send` and `Sync`.
+    ///
+    /// note that this function can be used to wait for multiple [`RcuWaitable`] objects at once while only performing a single rcu grace period by
+    /// combining them into a tuple and then calling [`wait`](Self::wait) on the entire tuple (e.g. `(a, b, c).wait().await`).
     fn wait(self) -> RcuWaitableWait<Self, impl Future<Output = ()>> {
         RcuWaitableWait {
             src_value: Some(self),
@@ -69,14 +75,6 @@ impl<T: RcuWaitable, S: Future<Output = ()>> Future for RcuWaitableWait<T, S> {
             Poll::Pending => Poll::Pending,
         }
     }
-}
-
-/// waits an rcu grace period, and then transforms the provided value into its post-grace-period output value.
-pub async fn rcu_wait_for<T: RcuWaitable>(value: T) -> T::Output {
-    synchronize_rcu().await;
-
-    // SAFETY: we waited an rcu grace period, so the value can now be transformed
-    unsafe { value.into_output() }
 }
 
 /// a helper macro used to implement the [`RcuWaitable`] for tuples made of types that all implement [`RcuWaitable`], so that you can perform a single
