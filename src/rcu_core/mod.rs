@@ -3,7 +3,10 @@
 pub(crate) mod epoch;
 mod notify;
 mod per_thread_storage;
+mod rcu_read_lock;
 mod thread_state;
+
+pub use rcu_read_lock::{RcuReadLockGuard, rcu_read_lock, rcu_read_lock_unchecked};
 
 use crate::{
     loom::{static_or_loom_lazy_static, std::sync::atomic},
@@ -586,7 +589,7 @@ pub fn on_after_task_poll() {
     }
 }
 
-/// returns whether the calling thread is an rcu tracked thread.
+/// returns whether the calling thread is an rcu tracked thread. all threads of an rcu enabled runtime are rcu tracked threads.
 ///
 /// rcu protected data may only be accessed on rcu tracked threads, since only tracked threads are waited for when waiting a grace period.
 pub fn is_rcu_tracked_thread() -> bool {

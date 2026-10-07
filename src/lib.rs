@@ -3,10 +3,12 @@
 //! this provides a lock-free and wait-free way to update a shared piece of state while it is concurrently being read and updated by
 //! other tasks.
 //!
-//! the core primitive provided by this crate is [`synchronize_rcu`], which works just like the `synchronize_rcu` function in the
-//! linux kernel - it waits for an rcu grace period, which allows writers to track when exactly they can reclaim swapped out data.
+//! the core primitives provided by this crate are [`synchronize_rcu`] and [`rcu_read_lock`], which work just like the `synchronize_rcu` and
+//! `rcu_read_lock` functions in the linux kernel. [`synchronize_rcu`] waits for an rcu grace period, and [`rcu_read_lock`] begins an rcu read
+//! side critical section.
 //!
-//! the low level [`synchronize_rcu`] primitive can be used to build a bunch of higher level abstractions.
+//! the low level [`synchronize_rcu`] primitive, combined with the [`rcu_read_lock`] primitive, can be used to build a bunch of higher level
+//! abstractions.
 //! one very simple abstraction - a single pointer to a heap-allocated piece of shared data (an "rcu box") - is implemented in this crate
 //! by the [`RcuBox`] type.
 //!
@@ -34,19 +36,20 @@
 //! this consistency of the read operation can be very important in latency-critical applications which require a high-performance
 //! fast path with predictable latency.
 //!
-//! also see [benchmarks](#benchmarks).
+//! see also [benchmarks](#benchmarks).
 //!
 //! # quick start
 //!
 //! ```rust
-//! use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
+//! use tokio_rcu::{rcu_block_on, rcu_read_lock, rcu_box::RcuBox};
 //!
 //! fn main() {
 //!     rcu_block_on(async move {
 //!         let numbers = RcuBox::new(Box::new(vec![1, 2, 3, 4]));
 //!
-//!         // the rcu box's data can safely be accessed using the `with` function.
-//!         numbers.with(|numbers| {
+//!         // the rcu box's contents can safely be accessed while holding an rcu read lock guard.
+//!         rcu_read_lock(|guard| {
+//!             let numbers = numbers.read(guard);
 //!             assert!(numbers.contains(&3));
 //!             assert!(!numbers.contains(&5));
 //!         });
@@ -56,7 +59,8 @@
 //!         let new_numbers = Box::new(vec![5, 6, 7, 8]);
 //!         let _old_numbers: Box<Vec<i32>> = numbers.swap(new_numbers).await;
 //!
-//!         numbers.with(|numbers| {
+//!         rcu_read_lock(|guard| {
+//!             let numbers = numbers.read(guard);
 //!             assert!(numbers.contains(&6));
 //!             assert!(!numbers.contains(&10));
 //!         });
@@ -283,7 +287,10 @@ pub mod test_utils;
 mod tokio_ext;
 mod utils;
 
-pub use rcu_core::{is_rcu_tracked_thread, synchronize_rcu};
+pub use rcu_core::{
+    RcuReadLockGuard, is_rcu_tracked_thread, rcu_read_lock, rcu_read_lock_unchecked,
+    synchronize_rcu,
+};
 
 #[cfg(not(loom))]
 pub use tokio_ext::rcu_block_on;

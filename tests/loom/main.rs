@@ -2,7 +2,7 @@
 
 use std::{pin::pin, task::Poll};
 
-use tokio_rcu::{rcu_box::RcuBox, synchronize_rcu};
+use tokio_rcu::{RcuReadLockGuard, rcu_box::RcuBox, rcu_read_lock, synchronize_rcu};
 
 use crate::{loom_waker::LoomWaker, uaf_detector::UafDetector};
 
@@ -108,7 +108,11 @@ fn read_and_write() {
                         }
                     };
 
-                    let first_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
+                    let first_seen_id = with_before_after_poll(|| {
+                        rcu_read_lock(|rcu_read_lock_guard| {
+                            check_guard_logic(&*state.read(rcu_read_lock_guard))
+                        })
+                    });
 
                     // emulate this thread going to sleep and waking up from it.
                     // this is used to exercise the just-waking thread path.
@@ -116,7 +120,11 @@ fn read_and_write() {
                     tokio_rcu::loom_tests_api::on_thread_unpark();
 
                     // re-poll after waking from sleep.
-                    let second_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
+                    let second_seen_id = with_before_after_poll(|| {
+                        rcu_read_lock(|rcu_read_lock_guard| {
+                            check_guard_logic(&*state.read(rcu_read_lock_guard))
+                        })
+                    });
 
                     // the id we see later must be greater than or equal the id we saw first, otherwise we see
                     // the writes happening in reverse, which should never happen.
@@ -305,7 +313,8 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                 let state = state.clone();
                 let results = results.clone();
                 move || {
-                    let guard = with_before_after_poll(|| unsafe { state.read() });
+                    let rcu_read_lock_guard = unsafe { RcuReadLockGuard::new() };
+                    let guard = with_before_after_poll(|| state.read(&rcu_read_lock_guard));
                     let guard_ref: &UafDetector = &*guard;
                     let guard_ptr = guard_ref as *const UafDetector;
                     if guard_ptr == uaf_detector0_ptr {
@@ -406,7 +415,11 @@ fn read_and_write_with_reset() {
                         }
                     };
 
-                    let first_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
+                    let first_seen_id = with_before_after_poll(|| {
+                        rcu_read_lock(|rcu_read_lock_guard| {
+                            check_guard_logic(&*state.read(rcu_read_lock_guard))
+                        })
+                    });
 
                     // emulate this thread going to sleep and waking up from it.
                     // this is used to exercise the just-waking thread path.
@@ -414,7 +427,11 @@ fn read_and_write_with_reset() {
                     tokio_rcu::loom_tests_api::on_thread_unpark();
 
                     // re-poll after waking from sleep.
-                    let second_seen_id = with_before_after_poll(|| state.with(check_guard_logic));
+                    let second_seen_id = with_before_after_poll(|| {
+                        rcu_read_lock(|rcu_read_lock_guard| {
+                            check_guard_logic(&*state.read(rcu_read_lock_guard))
+                        })
+                    });
 
                     // the id we see later must be greater than or equal the id we saw first, otherwise we see
                     // the writes happening in reverse, which should never happen.

@@ -6,24 +6,36 @@ use std::ops::Deref;
 
 use crate::{
     loom::std::sync::atomic::{self, AtomicPtr},
-    rcu_core::is_rcu_tracked_thread,
+    rcu_core::RcuReadLockGuard,
     synchronize_rcu,
     utils::{PhantomUnsend, PtrMutSendSync},
 };
 
 /// a read guard representing the data stored in an rcu box. this provides a temporary view into the underlying data.
 ///
-/// this guard must not be held across await points, and must not escape the future that acquired it in any way.
+/// this guard is returned from [`RcuBox::read`].
 ///
-/// this must manually be taken care of by the programmer. incorrect use will lead to undefined behaviour.
+/// the semantics of [`RcuBox::read`] enforce the correct usage of this read guard, e.g. it makes sure you can't hold it across await points.
+/// it does so by binding the lifetime of this guard to the lifetime of the [`RcuReadLockGuard`] that was provided when the data was read.
+///
+/// this guard cannot be sent between threads (it is [`!Send`](Send)), since that would allow one to send a guard acquired on an rcu tracked
+/// thread to a non rcu tracked thread, thus violating the safety contract of the read side of the rcu algorithm.
+///
+/// but, this guard can be shared between threads (it is [`Sync`]), since as long as the guard lives, you can freely share the contained value with
+/// other threads, even non rcu tracked ones.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RcuBoxReadGuard<'a, T> {
     value: &'a T,
 
     /// the guard must not be sent as it is associated with thread local state related to the rcu book-keeping, where we track which
     /// threads can use an old rcu pointer, while assuming that threads don't pass stale pointers between one another.
+    ///
+    /// but, note that this guard can be shared between threads, so it is [`Sync`].
+    /// a thread can acquire a read guard and then temporarily share the data with another thread, as long as it is still holding the read guard,
+    /// which keeps the data alive.
     _phantom: PhantomUnsend,
 }
+
 impl<'a, T> Deref for RcuBoxReadGuard<'a, T> {
     type Target = T;
 
@@ -202,95 +214,25 @@ impl<T> RcuBox<T> {
         }
     }
 
-    /// reads the rcu box and provides access to the data it currently contains.
-    ///
-    /// the usage of the data is limited to the provided closure to prevent it from being used across await points, and to prevent it
-    /// from escaping the calling function. this is needed to guarantee correct use of the rcu box.
-    ///
-    /// # Performance
-    ///
-    /// this function is very fast and cheap. other than calling the callback (which will probably be inlined into it), it only performs
-    /// a single atomic pointer load, plus one regular load of a non-shared thread local variable.
-    ///
-    /// if you really care about performance, consider using [`with_unchecked`](Self::with_unchecked) or [`read`](Self::read), which are
-    /// faster due to skipping some checks, at the cost of being unsafe.
-    ///
-    /// # Panics
-    ///
-    /// this function must only be called from a future running inside the tokio runtime, otherwise it will panic.
-    #[inline(always)]
-    pub fn with<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        assert!(
-            is_rcu_tracked_thread(),
-            "attempted to read an rcu box in a non rcu tracked thread"
-        );
-
-        // SAFETY:
-        // - we checked that we are inside an rcu-tracked tokio worker thread
-        // - the guard only lives throughout the current function, so the future can't yield while holding it.
-        // - the guard can't escape since the callback function F is an HRTB, so it can't assume anything about the lifetime of
-        //   the provided reference.
-        let guard = unsafe { self.read() };
-
-        f(&*guard)
-    }
-
-    /// reads the rcu box and provides access to the data it currently contains.
-    ///
-    /// the usage of the data is limited to the provided closure to prevent it from being used across await points, and to prevent it
-    /// from escaping the calling function. this is needed to guarantee correct use of the rcu box.
-    ///
-    /// # Performance
-    ///
-    /// this function is very fast and cheap. other than calling the callback (which will probably be inlined into it), it only performs
-    /// a single atomic pointer load. that's it.
-    ///
-    /// # Safety
-    ///
-    /// this function must only be called from a future running inside the tokio runtime.
-    #[inline(always)]
-    pub unsafe fn with_unchecked<F, R>(&self, f: F) -> R
-    where
-        F: FnOnce(&T) -> R,
-    {
-        // SAFETY:
-        // - caller must guarantee that we are inside an rcu-tracked tokio worker thread
-        // - the guard only lives throughout the current function, so the future can't yield while holding it.
-        // - the guard can't escape since the callback function F is an HRTB, so it can't assume anything about the lifetime of
-        //   the provided reference.
-        let guard = unsafe { self.read() };
-
-        f(&*guard)
-    }
-
     /// reads the rcu box, returning a read guard to the data it currently contains.
+    ///
+    /// the lifetime of the returned guard is bound to the lifetime of the provided [`RcuReadLockGuard`], which ensures correct use of the
+    /// returned guard.
     ///
     /// # Performance
     ///
     /// this function is very fast and cheap. it only performs a single atomic pointer load. that's it.
-    ///
-    /// for a safe alternative with a very small amount of added overhead, see [`with`](Self::with).
-    ///
-    /// # Safety
-    ///
-    /// this must only be called from a future running inside the tokio runtime.
-    ///
-    /// the returned guard must not be held across await points, must not be held after the future that acquired it finishes,
-    /// and must not escape that future's context (e.g. must not be saved inside a global variable and held across an await point
-    /// or longer than the future's lifetime).
-    ///
-    /// as soon as the future that acquired this read guard gets to a point where it `await`s or finishes execution (basically any
-    /// point which voluntarily yields the future), the guard must have already been dropped.
-    pub unsafe fn read(&self) -> RcuBoxReadGuard<'_, T> {
+    pub fn read<'a>(&'a self, guard: &'a RcuReadLockGuard) -> RcuBoxReadGuard<'a, T> {
         let ptr = self.value_ptr.load(
             // we want acquire ordering to make sure that the write to the pointed-at data happens before the
             // write of the pointer itself, so that when we use the loaded pointer, we are guaranteed to get
             // a valid object.
             atomic::Ordering::Acquire,
         );
+
+        // we don't really use the guard, we just need it as proof that the caller is holding an rcu read lock, and to bind the lifetime of the
+        // returned guard to the lifetime of the rcu read lock, to prevent it from being used outside of the critical section.
+        let _ = guard;
 
         RcuBoxReadGuard {
             // SAFETY: pointers are always valid by the invariants of this type.
@@ -329,12 +271,6 @@ impl<T> RcuBox<T> {
     /// function is not cancellation safe. if cancelled, it will leak the old value and panic.
     pub async fn swap(&self, new_value: Box<T>) -> Box<T> {
         self.swap_nowait(new_value).wait().await
-    }
-}
-impl<T: Clone> RcuBox<T> {
-    /// reads the rcu box and clones the value that it currently contains.
-    pub fn read_clone(&self) -> T {
-        self.with(|x| x.clone())
     }
 }
 impl<T> Drop for RcuBox<T> {

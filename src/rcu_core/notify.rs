@@ -85,7 +85,7 @@ impl Notify {
     /// this notify call will not explicitly cause it to wake up if it is currently blocking.
     ///
     /// this is used when the state change being notified about can't possibly be of any interest to the current thread itself.
-    /// see [`on_thread_park`](crate::on_thread_park) for the specific case where this is needed, and `Slot::thread_id` for more info.
+    /// see [`on_thread_park`](crate::rcu_core::on_thread_park) for the specific case where this is needed, and `Slot::thread_id` for more info.
     ///
     /// provides release memory ordering when a waiter finishes awaiting and was woken up by you or any notifier after you.
     pub fn notify_except_current_thread(&self) {

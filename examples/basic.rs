@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
+use tokio_rcu::{rcu_block_on, rcu_box::RcuBox, rcu_read_lock};
 
 #[derive(Debug, Clone)]
 struct SharedState {
@@ -24,7 +24,7 @@ fn main() {
                     async move {
                         loop {
                             let contains_desired_user =
-                                state.with(|state| state.contains_user("Alice"));
+                                rcu_read_lock(|guard| state.read(guard).contains_user("Alice"));
                             if contains_desired_user {
                                 break;
                             }
@@ -40,7 +40,7 @@ fn main() {
             .collect();
 
         // allocate a new state and add some new data into it.
-        let mut cur_state = state.read_clone();
+        let mut cur_state = rcu_read_lock(|guard| state.read(guard).clone());
         cur_state.users.push("Bob".into());
 
         // point all readers to the new state, and get back the old state
