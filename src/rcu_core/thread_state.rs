@@ -1,4 +1,4 @@
-use crate::core::epoch::EpochId;
+use crate::rcu_core::epoch::EpochId;
 
 /// the encoded state of a thread.
 ///

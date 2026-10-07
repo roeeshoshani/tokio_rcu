@@ -5,8 +5,8 @@
 use std::ops::Deref;
 
 use crate::{
-    core::is_rcu_tracked_thread,
     loom::std::sync::atomic::{self, AtomicPtr},
+    rcu_core::is_rcu_tracked_thread,
     synchronize_rcu,
     utils::{PhantomUnsend, PtrMutSendSync},
 };

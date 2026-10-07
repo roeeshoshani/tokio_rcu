@@ -6,7 +6,8 @@ mod per_thread_storage;
 mod thread_state;
 
 use crate::{
-    core::{
+    loom::{static_or_loom_lazy_static, std::sync::atomic},
+    rcu_core::{
         epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
         notify::Notify,
         per_thread_storage::{
@@ -16,7 +17,6 @@ use crate::{
         },
         thread_state::ThreadState,
     },
-    loom::{static_or_loom_lazy_static, std::sync::atomic},
     utils::{likely, unlikely},
 };
 

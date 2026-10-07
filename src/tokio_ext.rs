@@ -5,7 +5,7 @@ use std::task::Poll;
 use tokio::runtime::RuntimeFlavor;
 
 use crate::{
-    core::{
+    rcu_core::{
         on_after_task_poll, on_before_task_poll, on_thread_park, on_thread_stop, on_thread_unpark,
     },
     utils::unlikely,

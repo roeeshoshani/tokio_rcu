@@ -8,8 +8,8 @@ use std::num::NonZeroU16;
 use index_type::IndexType;
 
 use crate::{
-    core::thread_state::{EncodedThreadState, ThreadState},
     loom::{fn_const_if_not_loom, static_or_loom_lazy_static, std::cell::Cell},
+    rcu_core::thread_state::{EncodedThreadState, ThreadState},
     utils::atomic_type::Atomic,
 };
 
