@@ -34,6 +34,18 @@ pub trait RcuWaitable: Sized {
     ///
     /// note that this function can be used to wait for multiple [`RcuWaitable`] objects at once while only performing a single rcu grace period by
     /// combining them into a tuple and then calling [`wait`](Self::wait) on the entire tuple (e.g. `(a, b, c).wait().await`).
+    ///
+    /// # cancellation safety
+    ///
+    /// function is generally not cancellation safe.
+    ///
+    /// specific implementors of this trait may allow it to be cancelled, but most implementations are not cancellation safe, so you should just assume
+    /// that it is not cancellation safe.
+    ///
+    /// rcu waitable objects usually require you to wait for a grace period before they can be accessed in any way.
+    /// cancelling this future means dropping the rcu waitable object before finishing the grace period wait.
+    /// so, in that case, the rcu waitable object can't even be properly dropped, since it may still be accessed by concurrent readers.
+    /// types that can't be dropped before the grace period will panic in their drop implementation if this future is cancelled.
     fn wait(self) -> RcuWaitableWait<Self, impl Future<Output = ()>> {
         RcuWaitableWait {
             src_value: Some(self),
@@ -43,6 +55,10 @@ pub trait RcuWaitable: Sized {
 }
 
 /// the future which represents the operation of waiting on an [`RcuWaitable`] object, returned when calling [`RcuWaitable::wait`].
+///
+/// # cancellation safety
+///
+/// this future is not cancellation safe. see [`RcuWaitable::wait`] for more info.
 pub struct RcuWaitableWait<T: RcuWaitable, S: Future<Output = ()>> {
     src_value: Option<T>,
     synchronize_rcu: S,
