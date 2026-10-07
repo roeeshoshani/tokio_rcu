@@ -17,8 +17,6 @@ use crate::{is_rcu_tracked_thread, utils::PhantomUnsendUnsync};
 /// yields the future), the guard must have already been dropped.
 ///
 /// this type should generally not be used directly. you should instead use the safe [`rcu_read_lock`] API.
-///
-/// [`is_rcu_tracked_thread`]: crate::is_rcu_tracked_thread
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct RcuReadLockGuard {
     /// the guard must not be sent to other threads, otherwise it could be safely constructed on an rcu tracked thread, and then sent to a
@@ -43,7 +41,7 @@ impl RcuReadLockGuard {
     ///
     /// # Safety
     ///
-    /// this function must be called from an rcu tracked thread (see [`is_rcu_tracked_thread`](crate::is_rcu_tracked_thread)).
+    /// this function must be called from an rcu tracked thread (see [`is_rcu_tracked_thread`]).
     ///
     /// additionally, this guard must not be held across await points, must not be held after the future that acquired it finishes, and must not
     /// escape that future's context (e.g. must not be saved inside a global variable and held across an await point or longer than the future's
@@ -78,8 +76,6 @@ impl RcuReadLockGuard {
 ///
 /// if your code is EXTREMELY performance sensitive, consider using [`rcu_read_lock_unchecked`], which is faster due to skipping the rcu tracked thread
 /// check, at the cost of being unsafe.
-///
-/// [`is_rcu_tracked_thread`]: crate::is_rcu_tracked_thread
 #[inline(always)]
 pub fn rcu_read_lock<F, R>(f: F) -> R
 where
@@ -112,8 +108,6 @@ where
 /// # Performance
 ///
 /// this function is completely zero cost, it does absolutely nothing at runtime other than calling the callback. it is purely semantic.
-///
-/// [`is_rcu_tracked_thread`]: crate::is_rcu_tracked_thread
 #[inline(always)]
 pub unsafe fn rcu_read_lock_unchecked<F, R>(f: F) -> R
 where

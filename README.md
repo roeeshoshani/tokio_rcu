@@ -43,14 +43,15 @@ also see [benchmarks](#benchmarks).
 ## quick start
 
 ```rust
-use tokio_rcu::{rcu_block_on, rcu_box::RcuBox};
+use tokio_rcu::{rcu_block_on, rcu_read_lock, rcu_box::RcuBox};
 
 fn main() {
     rcu_block_on(async move {
         let numbers = RcuBox::new(Box::new(vec![1, 2, 3, 4]));
 
-        // the rcu box's data can safely be accessed using the `with` function.
-        numbers.with(|numbers| {
+        // the rcu box's contents can safely be accessed while holding an rcu read lock guard.
+        rcu_read_lock(|guard| {
+            let numbers = numbers.read(guard);
             assert!(numbers.contains(&3));
             assert!(!numbers.contains(&5));
         });
@@ -60,7 +61,8 @@ fn main() {
         let new_numbers = Box::new(vec![5, 6, 7, 8]);
         let _old_numbers: Box<Vec<i32>> = numbers.swap(new_numbers).await;
 
-        numbers.with(|numbers| {
+        rcu_read_lock(|guard| {
+            let numbers = numbers.read(guard);
             assert!(numbers.contains(&6));
             assert!(!numbers.contains(&10));
         });
