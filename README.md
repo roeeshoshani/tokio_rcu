@@ -7,10 +7,10 @@ a rust library providing an RCU (read-copy-update) algorithm specifically made f
 this provides a lock-free and wait-free way to update a shared piece of state while it is concurrently being read and updated by
 other tasks.
 
-the core primitive provided by this crate is [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/fn.synchronize_rcu.html), which works just like the `synchronize_rcu` function in the
+the core primitive provided by this crate is [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html), which works just like the `synchronize_rcu` function in the
 linux kernel - it waits for an rcu grace period, which allows writers to track when exactly they can reclaim swapped out data.
 
-the low level [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/fn.synchronize_rcu.html) primitive can be used to build a bunch of higher level abstractions.
+the low level [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html) primitive can be used to build a bunch of higher level abstractions.
 one very simple abstraction - a single pointer to a heap-allocated piece of shared data (an "rcu box") - is implemented in this crate
 by the [`RcuBox`] type.
 
@@ -102,11 +102,11 @@ can be reclaimed.
 
 to use the rcu primitives, you must use an rcu enabled tokio runtime.
 
-the easiest way to do this is to use the [`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/fn.rcu_block_on.html) function which creates a tokio runtime with rcu support enabled, and then
+the easiest way to do this is to use the [`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/tokio_ext/fn.rcu_block_on.html) function which creates a tokio runtime with rcu support enabled, and then
 runs the provided future inside that runtime using tokio's [`block_on`](https://docs.rs/tokio/latest/tokio/runtime/runtime/struct.Runtime.html#method.block_on).
 
-if you wish to manually configure your runtime, you can use the more low-level [`enable_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeBuilderExt.html#tymethod.enable_rcu) and
-[`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/trait.TokioRuntimeExt.html#tymethod.rcu_block_on) functions.
+if you wish to manually configure your runtime, you can use the more low-level [`enable_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/tokio_ext/trait.TokioRuntimeBuilderExt.html#tymethod.enable_rcu) and
+[`rcu_block_on`](https://docs.rs/tokio_rcu/latest/tokio_rcu/tokio_ext/trait.TokioRuntimeExt.html#tymethod.rcu_block_on) functions.
 
 ## performance overhead
 
@@ -264,9 +264,6 @@ LOOM_MAX_PREEMPTIONS=3 RUSTFLAGS="--cfg loom" cargo test --test loom --release
 the loom test suite can be found in `tests/loom/`, and aims to make sure that this crate is actually correct in the memory
 ordering sense of things, and that all the specially crafted atomic operations and fences actually provide the required
 guarantees.
-
-when running a full suite, it is recommended to actually run with `LOOM_MAX_PREEMPTIONS=4`, but this takes a lot of time,
-so during development, `LOOM_MAX_PREEMPTIONS=3` is used, which should be enough for most bugs.
 
 ## platform support
 

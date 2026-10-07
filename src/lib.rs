@@ -261,9 +261,6 @@
 //! ordering sense of things, and that all the specially crafted atomic operations and fences actually provide the required
 //! guarantees.
 //!
-//! when running a full suite, it is recommended to actually run with `LOOM_MAX_PREEMPTIONS=4`, but this takes a lot of time,
-//! so during development, `LOOM_MAX_PREEMPTIONS=3` is used, which should be enough for most bugs.
-//!
 //! # platform support
 //!
 //! this crate is supported on every platform that is supported by tokio.
