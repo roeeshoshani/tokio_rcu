@@ -7,10 +7,12 @@ a rust library providing an RCU (read-copy-update) algorithm specifically made f
 this provides a lock-free and wait-free way to update a shared piece of state while it is concurrently being read and updated by
 other tasks.
 
-the core primitive provided by this crate is [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html), which works just like the `synchronize_rcu` function in the
-linux kernel - it waits for an rcu grace period, which allows writers to track when exactly they can reclaim swapped out data.
+the core primitives provided by this crate are [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html) and [`rcu_read_lock`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/rcu_read_lock/fn.rcu_read_lock.html), which work just like the `synchronize_rcu` and
+`rcu_read_lock` functions in the linux kernel. [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html) waits for an rcu grace period, and [`rcu_read_lock`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/rcu_read_lock/fn.rcu_read_lock.html) begins an rcu read
+side critical section.
 
-the low level [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html) primitive can be used to build a bunch of higher level abstractions.
+the low level [`synchronize_rcu`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/fn.synchronize_rcu.html) primitive, combined with the [`rcu_read_lock`](https://docs.rs/tokio_rcu/latest/tokio_rcu/rcu_core/rcu_read_lock/fn.rcu_read_lock.html) primitive, can be used to build a bunch of higher level
+abstractions.
 one very simple abstraction - a single pointer to a heap-allocated piece of shared data (an "rcu box") - is implemented in this crate
 by the [`RcuBox`] type.
 
@@ -38,7 +40,7 @@ writing to it, but this is mostly negligible.
 this consistency of the read operation can be very important in latency-critical applications which require a high-performance
 fast path with predictable latency.
 
-also see [benchmarks](#benchmarks).
+see also [benchmarks](#benchmarks).
 
 ## quick start
 
