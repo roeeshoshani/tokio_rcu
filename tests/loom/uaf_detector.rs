@@ -27,7 +27,7 @@ type AllocPrefix = usize;
 type AllocPrefixAtomic = std::sync::atomic::AtomicUsize;
 
 /// a bit in the allocation prefix which marks an allocation as a tracked uaf detector allocation.
-const ALLOC_PREFIX_UAF_DETECTOR_ALLOC_BIT: AllocPrefix = 1 << (size_of::<AllocPrefix>() * 8 - 1);
+const ALLOC_PREFIX_UAF_DETECTOR_ALLOC_BIT: AllocPrefix = 1 << (AllocPrefix::BITS - 1);
 
 /// a key used to detect when a UAF detector is deallocated.
 ///
@@ -42,15 +42,18 @@ struct GlobalPool {
     /// when a thread dies, its reallocation pool gets collected into this global reallocation pool.
     /// other threads can then take allocations from this pool when their reallocation pool is empty, instead of allocating new
     /// memory from the system allocator.
+    #[allow(clippy::vec_box)]
     realloc: Vec<Box<UafDetector>>,
 
     /// allocations that can no longer be reallocated due to reaching the max tag value, and are now leaked to prevent a real
     /// use after free on these slots.
+    #[allow(clippy::vec_box)]
     leaked: Vec<Box<UafDetector>>,
 }
 
 /// a thread-local reallocation pool.
 struct ThreadReallocPool {
+    #[allow(clippy::vec_box)]
     slots: Vec<Box<UafDetector>>,
 }
 impl ThreadReallocPool {
@@ -88,7 +91,7 @@ thread_local! {
     /// forever, to avoid wasting huge amounts of memory.
     ///
     /// when the thread dies, the allocations in this thread local realloc pool move to the global realloc pool.
-    static REALLOC_POOL: RefCell<ThreadReallocPool> = RefCell::new(ThreadReallocPool::new());
+    static REALLOC_POOL: RefCell<ThreadReallocPool> = const { RefCell::new(ThreadReallocPool::new()) };
 }
 
 /// a global allocator which provides the necessary support for the [`UafDetector`] object to work properly without causing UB
@@ -215,9 +218,10 @@ impl UafDetectorSupportingAllocator {
     }
 
     /// returns a pointer to the prefix (AKA tag) of the given uaf detector allocation.
+    #[allow(clippy::borrowed_box)]
     fn uaf_detector_get_prefix_ref(uaf_detector: &Box<UafDetector>) -> &AllocPrefixAtomic {
         // SAFETY: the uaf detector is boxed, so it is heap allocated
-        unsafe { Self::uaf_detector_get_prefix_ref_byref(&uaf_detector) }
+        unsafe { Self::uaf_detector_get_prefix_ref_byref(uaf_detector) }
     }
 
     /// returns a pointer to the prefix (AKA tag) of the given uaf detector allocation, by reference.
@@ -368,6 +372,7 @@ impl UafDetector {
 
     /// returns the id of this UAF detector, or `None` if this UAF detector has already been freed.
     #[allow(unused)]
+    #[allow(clippy::borrowed_box)]
     pub fn try_id(self: &Box<UafDetector>, key: UafDetectorKey) -> Option<usize> {
         // SAFETY: `self` is a heap allocation
         unsafe { self.try_id_byref(key) }
@@ -391,6 +396,7 @@ impl UafDetector {
     /// returns the id of this UAF detector.
     /// if this UAF detector has already been freed, this function safely detects the UAF and panic with a corresponding error
     /// message.
+    #[allow(clippy::borrowed_box)]
     pub fn id(self: &Box<UafDetector>, key: UafDetectorKey) -> usize {
         // SAFETY: `self` is a heap allocation
         unsafe { self.id_byref(key) }
