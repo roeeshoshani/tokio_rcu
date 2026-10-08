@@ -3,6 +3,7 @@
 pub(crate) mod epoch;
 mod notify;
 mod per_thread_storage;
+mod qs_read_mostly_data;
 mod rcu_read_lock;
 mod thread_state;
 
@@ -18,17 +19,13 @@ use crate::{
             this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
             thread_storage_slot_get_all,
         },
+        qs_read_mostly_data::thread_epoch_updated_notify,
         thread_state::ThreadState,
     },
     utils::{likely, unlikely},
 };
 
 static_or_loom_lazy_static! {
-    /// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful
-    /// way (e.g. become non-busy). used by waiters to wait for notifications in a blocking manner while waiting for threads to see
-    /// their new epoch id, instead of constantly busy polling all threads.
-    static THREAD_EPOCH_UPDATED_NOTIFY: Notify = Notify::new();
-
     /// a lock used to synchronize the reset operation.
     /// a reset operation is performed when the epoch id overflows, in order to reset the epoch id back to its minimum value.
     ///
@@ -272,7 +269,7 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         //
         // as for the overflow behaviour of `notified`, the time window where we hold the returned future before awaiting it
         // is very small, so we shouldn't expect overflow to occur here.
-        let notified = THREAD_EPOCH_UPDATED_NOTIFY.notified();
+        let notified = thread_epoch_updated_notify().notified();
 
         // we need an SC fence here, paired with an SC fence in all notifiers, to prevent the following deadlock scenario:
         // we start listening by calling `notified`, then read each thread's state. the quiescent states on their side first
@@ -367,9 +364,9 @@ pub fn on_thread_stop() {
         // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected pointers.
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-        // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
+        // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
         atomic::fence(atomic::Ordering::SeqCst);
-        THREAD_EPOCH_UPDATED_NOTIFY.notify();
+        thread_epoch_updated_notify().notify();
     }
 }
 
@@ -403,7 +400,7 @@ pub fn on_thread_park() {
     // pointers.
     //
     // note that we specifically use `notify_except_current_thread` to avoid having a thread wake itself up immediately as it tries to park.
-    // consider the scenario where a thread starts waiting for a notification on the `THREAD_EPOCH_UPDATED_NOTIFY` object. the thread starts
+    // consider the scenario where a thread starts waiting for a notification on the `thread_epoch_updated_notify` object. the thread starts
     // waiting and parks itself. when it parks, this park hook is called, and immediately calls notify on the same `Notify` object that this
     // thread itself just started waiting for. this causes the thread itself to wake itself up as soon as it tried to park, preventing the thread
     // from properly parking and waiting for a notification.
@@ -424,9 +421,9 @@ pub fn on_thread_park() {
     // so, having the thread wake itself up when it parks is unnecessary in every possible scenario.
     //
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
+    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
     atomic::fence(atomic::Ordering::SeqCst);
-    THREAD_EPOCH_UPDATED_NOTIFY.notify_except_current_thread();
+    thread_epoch_updated_notify().notify_except_current_thread();
 }
 
 pub fn on_thread_unpark() {
@@ -488,9 +485,9 @@ pub fn on_thread_unpark() {
     // waiting for us to see their new epoch id.
     //
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
+    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
     atomic::fence(atomic::Ordering::SeqCst);
-    THREAD_EPOCH_UPDATED_NOTIFY.notify();
+    thread_epoch_updated_notify().notify();
 }
 
 pub fn on_before_task_poll() {
@@ -530,7 +527,7 @@ pub fn on_before_task_poll() {
 
     // see `on_thread_unpark` for more info
     atomic::fence(atomic::Ordering::SeqCst);
-    THREAD_EPOCH_UPDATED_NOTIFY.notify();
+    thread_epoch_updated_notify().notify();
 }
 
 pub fn on_after_task_poll() {
@@ -583,9 +580,9 @@ pub fn on_after_task_poll() {
         // if the last seen epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-        // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `THREAD_EPOCH_UPDATED_NOTIFY.notified()`.
+        // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
         atomic::fence(atomic::Ordering::SeqCst);
-        THREAD_EPOCH_UPDATED_NOTIFY.notify();
+        thread_epoch_updated_notify().notify();
     }
 }
 

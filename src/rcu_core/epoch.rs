@@ -1,6 +1,5 @@
-use crate::loom::{static_or_loom_lazy_static, std::sync::atomic};
-
-use crate::utils::atomic_type::Atomic;
+use crate::loom::std::sync::atomic;
+use crate::rcu_core::qs_read_mostly_data::cur_epoch_id;
 use crate::utils::unlikely;
 
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
@@ -43,20 +42,6 @@ pub const EPOCH_ID_MIN: EpochId = 2;
 /// thus, its max value is not the underlying integer type's max value, instead it is 1 less.
 pub const EPOCH_ID_MAX: EpochId = EpochId::MAX - 1;
 
-static_or_loom_lazy_static! {
-    /// the current global epoch id.
-    /// its value must always be a valid epoch id value.
-    ///
-    /// used to synchronize threads that are waiting for a grace period with all other threads, by making all threads constantly load this
-    /// value and publish their last seen epoch id.
-    /// a waiter can then increment it and wait until all threads see his increment in their last seen epoch id value.
-    ///
-    /// we start with MIN+2 instead of just MIN since MIN is used as a "reset value", used during an epoch id reset operation to track which
-    /// threads saw the reset value. we don't want the initial value to look like a reset value, since that could cause a stale epoch id value
-    /// sampled at the start of the program to look like a reset value.
-    static CUR_EPOCH_ID: Atomic<EpochId> = Atomic::<EpochId>::new(EPOCH_ID_MIN + 2);
-}
-
 /// an error returned when an overflow is detected while trying to increment the epoch id.
 #[derive(Debug)]
 pub struct EpochIdOverflowErr {
@@ -71,7 +56,7 @@ pub struct EpochIdOverflowErr {
 /// loads the current epoch id atomically with the given ordering. this only performs a single atomic load operation.
 #[inline]
 pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
-    CUR_EPOCH_ID.load(ordering)
+    cur_epoch_id().load(ordering)
 }
 
 /// increments the epoch id atomically, returning the new epoch id after the increment.
@@ -86,7 +71,7 @@ pub fn epoch_id_get(ordering: atomic::Ordering) -> EpochId {
 /// in the failure case, the increment may or may not happen, and if it does, it happens with release ordering.
 #[inline]
 pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
-    match CUR_EPOCH_ID.try_update(
+    match cur_epoch_id().try_update(
         // for the success case, we want release ordering to guarantee that the swapping of the rcu protected pointer happens before
         // the increment of the epoch id, otherwise someone may see the increment before the swap of the pointer, causing us to release
         // the data, where he would then try using that freed data.
@@ -135,5 +120,5 @@ pub fn epoch_id_inc() -> Result<EpochId, EpochIdOverflowErr> {
 
 /// directly sets the epoch id to the given value with the given ordering.
 pub fn epoch_id_set(new_value: EpochId, ordering: atomic::Ordering) {
-    CUR_EPOCH_ID.store(new_value, ordering);
+    cur_epoch_id().store(new_value, ordering);
 }

@@ -10,6 +10,7 @@ keywords = ["rcu", "async", "tokio"]
 categories = ["concurrency", "algorithms", "asynchronous", "data-structures", "memory-management"]
 
 [dependencies]
+crossbeam-utils = "0.8.23"
 index_type = "0.7.1"
 num_cpus = "1.17.0"
 parking_lot = "0.12.5"
