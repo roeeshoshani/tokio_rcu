@@ -34,8 +34,8 @@ jobs:
           locked: true
           version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
-      - run: RUSTFLAGS="--cfg tokio_unstable -D warnings" cargo all-features check --all-targets
-      - run: RUSTFLAGS="--cfg loom -D warnings" cargo all-features check --lib --bins --test loom
+      - run: env RUSTFLAGS="--cfg tokio_unstable -D warnings" cargo all-features check --all-targets
+      - run: env RUSTFLAGS="--cfg loom -D warnings" cargo all-features check --lib --bins --test loom
 
   tests-release-mode:
     strategy:
@@ -127,7 +127,7 @@ jobs:
           locked: true
           version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
-      - run: RUSTFLAGS="--cfg loom" LOOM_MAX_PREEMPTIONS="3" cargo test --test loom --release
+      - run: env RUSTFLAGS="--cfg loom" LOOM_MAX_PREEMPTIONS="3" cargo test --test loom --release
 
   fmt:
     runs-on: ubuntu-latest
@@ -156,7 +156,7 @@ jobs:
           version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
       - run: cargo all-features clippy --all-targets -- -D warnings
-      - run: RUSTFLAGS="--cfg loom" cargo all-features clippy  --lib --bins --test loom -- -D warnings
+      - run: env RUSTFLAGS="--cfg loom" cargo all-features clippy  --lib --bins --test loom -- -D warnings
 
   readme:
     runs-on: ubuntu-latest
@@ -185,7 +185,7 @@ jobs:
           locked: true
           version: ${{ env.CARGO_ALL_FEATURES_VERSION }}
 
-      - run: RUSTDOCFLAGS="--cfg tokio_unstable -D warnings" cargo all-features doc --no-deps
+      - run: env RUSTDOCFLAGS="--cfg tokio_unstable -D warnings" cargo all-features doc --no-deps
 
   typos:
     runs-on: ubuntu-latest
