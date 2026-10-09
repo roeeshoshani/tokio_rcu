@@ -2,20 +2,39 @@ use std::{
     fmt::Display,
     hint::black_box,
     sync::{
-        Arc,
+        Arc, LazyLock,
         atomic::{self, AtomicBool},
     },
 };
 
 use arc_swap::ArcSwap;
 use tokio_rcu::{
-    RcuReadLockGuard,
+    RcuReadLockGuard, TokioRuntimeBuilderExt, TokioRuntimeExt,
     primitives::{rcu_box::RcuBox, rcu_waitable::RcuWaitable},
-    rcu_block_on,
 };
 
 fn main() {
     divan::main();
+}
+
+/// a shared rcu runtime re-used by the different benchmarks.
+///
+/// building a runtime is expensive, it requires creating many OS threads.
+/// creating and tearing it down every benchmark iteration adds a huge amount of noise.
+/// so, we create it once, then re-use it everywhere.
+///
+/// note that the benchmarks never run in parallel, so it is ok to re-use the same runtime - the benchmarks won't be running concurrently on that
+/// shared runtime, the will be running sequentially, with each benchmark using the shared runtime during its turn to run.
+static SHARED_RCU_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| unsafe {
+    let mut builder = tokio::runtime::Builder::new_multi_thread();
+    builder.enable_all();
+    builder.enable_rcu();
+    builder.build().unwrap()
+});
+
+fn shared_runtime_rcu_block_on<F: Future>(future: F) -> F::Output {
+    // SAFETY: the shared rcu runtime was created with `enable_rcu`
+    unsafe { SHARED_RCU_RUNTIME.rcu_block_on(future) }
 }
 
 const NUM_READS_PER_ITERATION: usize = 8192;
@@ -28,7 +47,7 @@ const READ_ONLY_BENCH_NUM_TASKS_ARGS: &[usize] = &[1, 8, 16, 32, 64];
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
 fn read_only_rcu_box(num_tasks: usize) {
-    rcu_block_on(async move {
+    shared_runtime_rcu_block_on(async move {
         let data = Arc::new(RcuBox::new(Box::new(0)));
         let tasks: Vec<_> = (0..num_tasks)
             .map(move |_| {
@@ -56,7 +75,7 @@ fn read_only_rcu_box(num_tasks: usize) {
 
 #[divan::bench(threads = false, args = READ_ONLY_BENCH_NUM_TASKS_ARGS)]
 fn read_only_arc_swap(num_tasks: usize) {
-    rcu_block_on(async move {
+    shared_runtime_rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let tasks: Vec<_> = (0..num_tasks)
             .map(move |_| {
@@ -134,7 +153,7 @@ const READ_WHILE_WRITING_BENCH_CFGS: &[ReadWhileWritingBenchCfg] = &[
 
 #[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
 fn read_while_writing_rcu_box(cfg: ReadWhileWritingBenchCfg) {
-    rcu_block_on(async move {
+    shared_runtime_rcu_block_on(async move {
         let data = Arc::new(RcuBox::new(Box::new(0)));
         let readers: Vec<_> = (0..cfg.num_reader_tasks)
             .map({
@@ -193,7 +212,7 @@ fn read_while_writing_rcu_box(cfg: ReadWhileWritingBenchCfg) {
 
 #[divan::bench(threads = false, args = READ_WHILE_WRITING_BENCH_CFGS)]
 fn read_while_writing_arc_swap(cfg: ReadWhileWritingBenchCfg) {
-    rcu_block_on(async move {
+    shared_runtime_rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let readers: Vec<_> = (0..cfg.num_reader_tasks)
             .map({
@@ -310,7 +329,7 @@ const WRITE_WHILE_READING_BENCH_CFGS: &[WriteWhileReadingBenchCfg] = &[
 
 #[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
 fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
-    rcu_block_on(async move {
+    shared_runtime_rcu_block_on(async move {
         let data = Arc::new(RcuBox::new(Box::new(0)));
         let writers: Vec<_> = (0..cfg.num_writer_tasks)
             .map({
@@ -371,7 +390,7 @@ fn write_while_reading_rcu_box(cfg: WriteWhileReadingBenchCfg) {
 
 #[divan::bench(threads = false, args = WRITE_WHILE_READING_BENCH_CFGS)]
 fn write_while_reading_arc_swap(cfg: WriteWhileReadingBenchCfg) {
-    rcu_block_on(async move {
+    shared_runtime_rcu_block_on(async move {
         let data = Arc::new(ArcSwap::new(Arc::new(0)));
         let writers: Vec<_> = (0..cfg.num_writer_tasks)
             .map({
