@@ -45,6 +45,8 @@ pub struct EpochIdNotificationsSubscription<'a> {
 
     had_already_registered: bool,
 
+    did_someone_consume_my_subscriber_info: bool,
+
     // not really used, just used to enforce that only one task is using this at any given moment.
     // this algorithm is explicitly designed to support only the single waiter case, since our gp waiters are serialized.
     _gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
@@ -55,17 +57,20 @@ impl<'a> EpochIdNotificationsSubscription<'a> {
     ) -> Self {
         HAS_SUBSCRIBER.store(
             true,
-            // TODO: ordering
+            // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
             atomic::Ordering::Relaxed,
         );
 
         Self {
             _gp_serialization_guard: gp_serialization_guard,
             num_notifications_snapshot: NUM_NOTIFICATIONS.load(
-                // TODO: ordering
+                // no special ordering is needed here, since this is only synchronizing with old notifiers, and we don't care about them, only
+                // new notifiers which actually wake us up are relevant.
+                // TODO: is it ok that we don't synchronize with old notifiers? think this through
                 atomic::Ordering::Relaxed,
             ),
             had_already_registered: false,
+            did_someone_consume_my_subscriber_info: false,
         }
     }
 
@@ -78,8 +83,8 @@ impl<'a> EpochIdNotificationsSubscription<'a> {
         if new_num_notifications != self.num_notifications_snapshot {
             // got some notifications since we started listening
 
-            // need acquire ordering for the memory ordering guarantees chosen for this data structure.
-            // TODO: update docs above
+            // need acquire ordering to synchronize with the notifier who woke us up.
+            // not relevant to this primitive itself, but relevant to users of this primitive.
             atomic::fence(atomic::Ordering::Acquire);
 
             return true;
@@ -131,6 +136,13 @@ impl<'a> EpochIdNotificationsSubscription<'a> {
                 }
                 None => {
                     // we registered ourselves, and someone consumed that info. this means someone notified us, so we are done waiting.
+
+                    // SAFETY: we don't move out of self
+                    unsafe {
+                        self.get_unchecked_mut()
+                            .did_someone_consume_my_subscriber_info = true
+                    };
+
                     RegisterSubscriberInfoResult::WakeUp
                 }
             }
@@ -180,15 +192,17 @@ impl<'a> Future for EpochIdNotificationsSubscription<'a> {
 
 impl<'a> Drop for EpochIdNotificationsSubscription<'a> {
     fn drop(&mut self) {
-        // TODO: don't do stuff unconditionally on drop. do it only when really needed.
-        // for example, don't try draining waker if we didn't even store it.
-        // also, don't write to has waker if we already did it in the poll impl.
-
-        HAS_SUBSCRIBER.store(
-            false,
-            // TODO: ordering
-            atomic::Ordering::Relaxed,
-        );
+        // reset the `HAS_SUBSCRIBER` flag back to false.
+        //
+        // as an optimization, we can skip this write to shared memory if someone had consumed our waker, since in that case, that someone had
+        // already reset the flag to false for us.
+        if !self.did_someone_consume_my_subscriber_info {
+            HAS_SUBSCRIBER.store(
+                false,
+                // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
+                atomic::Ordering::Relaxed,
+            );
+        }
 
         // if we registered ourselves, remove that stale data, if any
         if self.had_already_registered {
@@ -220,8 +234,11 @@ fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
 
     NUM_NOTIFICATIONS.fetch_add(
         1,
-        // TODO: ordering
-        atomic::Ordering::Relaxed,
+        // use release ordering to synchronize with the waiter, such that if the waiter sees our increment, it guarantees a happens before
+        // relationship in relation to all of our previous memory writes.
+        //
+        // not relevant to this primitive itself, but relevant to users of this primitive. atomic::Ordering::Release,
+        atomic::Ordering::Release,
     );
 
     // start with a read lock so that if we end up not needing to do anything, we don't slow other threads down.
@@ -259,4 +276,11 @@ fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
     // SAFETY: we just checked that this is not `None`, and we're holding the write lock, so it couldn't have changed.
     let subscriber_info_owned = unsafe { subscriber_info_opt.take().unwrap_unchecked() };
     subscriber_info_owned.waker.wake();
+
+    // the single subscriber has been woken up by us, so there is no longer any subscriber.
+    HAS_SUBSCRIBER.store(
+        false,
+        // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
+        atomic::Ordering::Relaxed,
+    );
 }
