@@ -10,10 +10,12 @@ mod thread_state;
 pub use rcu_read_lock::{RcuReadLockGuard, rcu_read_lock, rcu_read_lock_unchecked};
 
 use crate::{
-    loom::{static_or_loom_lazy_static, std::sync::atomic},
+    loom::{
+        static_or_loom_lazy_static,
+        std::sync::atomic::{self, AtomicUsize},
+    },
     rcu_core::{
-        epoch::{EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_inc, epoch_id_set},
-        notify::Notify,
+        epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_set},
         per_thread_storage::{
             this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
             this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
@@ -25,34 +27,30 @@ use crate::{
     utils::{likely, unlikely},
 };
 
-static_or_loom_lazy_static! {
-    /// a lock used to synchronize the reset operation.
-    /// a reset operation is performed when the epoch id overflows, in order to reset the epoch id back to its minimum value.
-    ///
-    /// when some thread increments the epoch id and causes it to exceed its max threshold, this thread begins a reset operation.
-    /// for resetting the epoch id, the thread must reset the global epoch id back to its initial value, then wait for all threads to
-    /// see this new state while blocking any further increments of the epoch id until all threads see the reset value.
-    ///
-    /// in order to prevent the further increments of the epoch id during the reset operation, this lock is used.
-    /// all incrementors of the epoch id lock it for reading before incrementing, and during the reset operation, the leader of the reset (the
-    /// first one to increment the epoch id past its max threshold) locks this lock for writing, thus preventing any new incrementors from
-    /// incrementing the epoch id.
-    ///
-    /// this also ensures that we don't start performing a reset operation while some incrementor thread is still waiting for threads to see
-    /// his incremented epoch id. if we were to start the reset while he was waiting, he would get stuck until the next overflow of the epoch
-    /// id.
-    static EPOCH_ID_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+/// a dummy type used as the inner data type of [`GRACE_PERIODS_SERIALIZATION_MUTEX`]. used to distinguish mutex guards of that mutex from
+/// other guards.
+///
+/// # Safety
+///
+/// must only be used as the data of the [`GRACE_PERIODS_SERIALIZATION_MUTEX`] mutex.
+struct GPSerializationMutexMarker;
 
-    /// when a thread increments the epoch id past its max threshold, this thread begins a reset operation.
-    /// while that thread was incrementing the epoch id, another thread may have also been incrementing the epoch id, and also saw that it
-    /// reached its max threshold. so, that thread also begins the reset operation.
+static_or_loom_lazy_static! {
+    /// a mutex which serializes grace period operations.
     ///
-    /// in practice, the reset is actually only performed by a single thread - the leader, and all other threads that entered reset just wait
-    /// for him to finish resetting.
-    ///
-    /// so, this notification is used by the leader of a reset operation to notify all other threads that have also entered reset that the reset
-    /// operation is done.
-    static RESET_FINISHED_NOTIFICATION: Notify = Notify::new();
+    /// there can only be 1 task which is actively working on performing a grace period at any given moment, but that task may perform the grace period
+    /// on behalf of multiple other waiters as well as itself.
+    static GP_SERIALIZATION_MUTEX: tokio::sync::Mutex<GPSerializationMutexMarker> =
+        tokio::sync::Mutex::const_new(GPSerializationMutexMarker);
+
+    // TODO
+    static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    // TODO
+    static GP_FINISHED_COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+    // TODO
+    static EPOCH_ID_UPDATED_NOTIFICATIONS: AtomicUsize = AtomicUsize::new(0);
 }
 
 /// this function just performs an SC fence, but it provides special guarantees when performed directly after modifying the global
@@ -80,17 +78,79 @@ fn post_epoch_id_modification_sc_fence() {
 /// once this function returns, it is guaranteed that any rcu-protected piece of data that was made unreachable (e.g. by swapping it with
 /// another piece of data) before calling this function is now no longer used by any thread in the process, including the current thread.
 pub async fn synchronize_rcu() {
-    // lock the reset sync lock for reading.
-    //
-    // this ensures that if any reset operation is currently ongoing, we don't interrupt it by incrementing the epoch id while it
-    // is being reset, and we instead wait for it to finish and only then go on with our increment.
-    //
-    // this exclusivity is guaranteed since during reset the leader of the reset locks the reset sync lock for writing.
-    //
-    // this also ensures that a reset operation is not initiated while we are still waiting for threads to see our incremented epoch id,
-    // since we hold this until we finish waiting.
-    let reset_sync_read_guard = EPOCH_ID_RESET_SYNC_LOCK.read().await;
+    // TODO: handle overflow
+    let my_gp_counter = GP_STARTED_COUNTER.fetch_add(
+        1,
+        // TODO: ordering (this should probably be release, see comment when reloading this counter)
+        atomic::Ordering::Relaxed,
+    );
 
+    // enter the critical section which is serialized between all tasks waiting for grace periods.
+    let gp_serialization_guard = GP_SERIALIZATION_MUTEX.lock().await;
+
+    // check if someone already did the work for us
+    let gp_finished_counter = GP_FINISHED_COUNTER.load(
+        // TODO: ordering
+        atomic::Ordering::Relaxed,
+    );
+    if gp_finished_counter >= my_gp_counter {
+        // since we are not the ones who did the work, it is expected that the finished counter is actually greater than our counter in this case,
+        // and never equal.
+        debug_assert_ne!(gp_finished_counter, my_gp_counter);
+
+        // someone did the work for us, we are done.
+        return;
+    }
+
+    // re-load the gp started counter.
+    // this ensures that when we perform the actual grace period work below, we do the work for all current waiters in addition to doing it for
+    // ourselves.
+    // note that we may have slept for a while since the last time we read this counter, which was when we incrmeneted it. since then, other waiters
+    // may have also incremented it.
+    // if we see their increments, we also see all writes they performed before it, so when we perform our grace period, we basically perform it for
+    // them as well, and give them the memory ordering guarantees that they need in regards to writes performed by them before they started the grace
+    // period.
+    let gp_started_counter = GP_STARTED_COUNTER.load(
+        // TODO: ordering (this should probably be relaxed, see comment above)
+        atomic::Ordering::Relaxed,
+    );
+
+    synchronize_rcu_serialized(&gp_serialization_guard);
+
+    // publish the fact that we finished the gp for all the waiters included in our gp started counter read.
+    GP_FINISHED_COUNTER.store(
+        gp_started_counter,
+        // TODO: ordering
+        atomic::Ordering::Relaxed,
+    );
+
+    // this makes sure that the guard is help up until this point and is not accidentally dropped earlier than needed.
+    drop(gp_serialization_guard);
+}
+
+/// actually performs the core logic of the grace period operation, which must be serialized using the [`GRACE_PERIODS_SERIALIZATION_MUTEX`] mutex
+/// such that only one task is working performing a grace period at any given moment.
+async fn synchronize_rcu_serialized(
+    gp_serialization_guard: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
+) {
+    // before incrementing the epoch id, check for overflow.
+    let orig_epoch_id = epoch_id_get(
+        // no ordering is needed, we have exclusive access to the epoch id thanks to the gp serialization mutex
+        atomic::Ordering::Relaxed,
+    );
+
+    if orig_epoch_id == EPOCH_ID_MAX {
+        synchronize_rcu_epoch_overflow(gp_serialization_guard).await
+    } else {
+        synchronize_rcu_no_epoch_overflow(orig_epoch_id, gp_serialization_guard).await
+    }
+}
+
+/// the synchronize rcu logic in the case where the epoch id is not overflowed.
+async fn synchronize_rcu_no_epoch_overflow(
+    orig_epoch_id: EpochId,
+    _: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
+) {
     // increment the epoch id.
     //
     // this is used as a communication primitive with the worker threads.
@@ -99,138 +159,98 @@ pub async fn synchronize_rcu() {
     //
     // we can then sample their published last seen epoch id to know when they saw our increment, and once they did, we know that they
     // passed through a quiescent state.
-    match epoch_id_inc() {
-        Ok(new_epoch_id) => {
-            // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
-            // performs that SC fence for us.
+    let new_epoch_id = orig_epoch_id + 2;
+    epoch_id_set(
+        new_epoch_id,
+        // TODO: ordering (probably release)
+        atomic::Ordering::Relaxed,
+    );
 
-            // wait for all threads to see the new epoch id.
-            // we only need to consider busy threads thanks to the SC fence.
-            //
-            // note that we also wait for the current thread here.
-            // this is needed as a workaround to remove overhead from the fast-path of the rcu to the slow path.
-            // specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
-            // holding a read guard to it on the same thread, for example by manually polling the swap future.
-            // making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
-            // wait operation will never finish unless the calling thread actually passes through a quiescent state, at which point he can no longer
-            // be holding any read guards.
-            // a deadlock is not ideal, but this should never happen during proper use of this library anyway, and it prevents the UAF without
-            // adding overhead of checks in the fast path, which is a big win.
-            // also note that setting this flag means that the wait operation will always yield at least once, to let the calling thread pass
-            // through a quiescent state, even if all threads immediately pass through a quiescent state and see the epoch id increment.
-            wait_for_running_threads_to_see_epoch_id(
-                |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
-                true,
-            )
-            .await;
+    // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
+    // performs that SC fence for us.
 
-            // ensure that the reset sync read guard is held up until this point.
-            // this is important to make sure that a reset operation is not initiated while we are still waiting for threads to see our new
-            // epoch id, otherwise we would keep waiting until the next overflow of the epoch id.
-            drop(reset_sync_read_guard);
-        }
-        Err(err) => {
-            // epoch id overflow.
+    // wait for all threads to see the new epoch id.
+    // we only need to consider busy threads thanks to the SC fence.
+    //
+    // note that we also wait for the current thread here.
+    // this is needed as a workaround to remove overhead from the fast-path of the rcu to the slow path.
+    // specifically, this helps preventing a specific category of misuse where a user tries to swap an rcu pointer while simultaneously
+    // holding a read guard to it on the same thread, for example by manually polling the swap future.
+    // making this also wait for the calling thread prevents this misuse from causing a UAF, instead converting it to a deadlock - the
+    // wait operation will never finish unless the calling thread actually passes through a quiescent state, at which point he can no longer
+    // be holding any read guards.
+    // a deadlock is not ideal, but this should never happen during proper use of this library anyway, and it prevents the UAF without
+    // adding overhead of checks in the fast path, which is a big win.
+    // also note that setting this flag means that the wait operation will always yield at least once, to let the calling thread pass
+    // through a quiescent state, even if all threads immediately pass through a quiescent state and see the epoch id increment.
+    wait_for_running_threads_to_see_epoch_id(
+        |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
+        true,
+    )
+    .await;
+}
 
-            // perform a reset of the epoch id
-            if err.am_i_the_leader {
-                // re-lock the reset sync lock for writing.
-                //
-                // once we succeed grabbing the write lock, it is guaranteed that:
-                // - all previous waiters finished waiting for their grace period
-                // - all non-leader waiters that also entered reset mode have started listening to the reset
-                // - all new waiters will be blocked until we finish.
-                drop(reset_sync_read_guard);
-                let reset_sync_write_guard = EPOCH_ID_RESET_SYNC_LOCK.write().await;
+/// the synchronize rcu logic in the case where the epoch id is overflowed.
+async fn synchronize_rcu_epoch_overflow(
+    _: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
+) {
+    // reset the epoch id
+    epoch_id_set(
+        EPOCH_ID_MIN,
+        // we don't need any ordering here. this is not yet part of the actual grace period, this is only meant
+        // to reset the epoch id back to its minimum value.
+        // the actually release store that is part of the grace period will be performed later, when incrementing
+        // the post-reset epoch id.
+        //
+        // furthermore, we are more than fine with breaking the release sequence of the epoch id, since we are
+        // currently the only one using it for any operation, thanks to the gp serialization mutex.
+        atomic::Ordering::Relaxed,
+    );
 
-                // reset the epoch id
-                epoch_id_set(
-                    EPOCH_ID_MIN,
-                    // we don't need any ordering here. this is not yet part of the actual grace period, this is only meant
-                    // to reset the epoch id back to its minimum value.
-                    // the actually release store that is part of the grace period will be performed later, when incrementing
-                    // the post-reset epoch id.
-                    //
-                    // furthermore, we are more than fine with breaking the release sequence of the epoch id, since we are
-                    // currently the only one using it for any operation, due to the write lock of the reset sync lock.
-                    atomic::Ordering::Relaxed,
-                );
+    // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
+    // performs that SC fence for us.
 
-                // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
-                // performs that SC fence for us.
+    // wait for all threads to update their last seen epoch id to the reset value.
+    // we only need to consider busy threads thanks to the SC fence.
+    //
+    // as for the busy threads, you may think that us seeing that their last seen epoch id is MIN is not enough, since that MIN may be
+    // some stale value they have from a previous reset operation. but, this actually can't happen due to the increment that we perform
+    // right after this wait, where we increment to MIN+2 and once again wait for everyone to update to MIN+2.
+    //
+    // this guarantees that after that increment, every thread will either see MIN+2 or be sleeping but guaranteed to see MIN+2 when he
+    // wakes up.
+    wait_for_running_threads_to_see_epoch_id(
+        |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN,
+        false,
+    )
+    .await;
 
-                // wait for all threads to update their last seen epoch id to the reset value.
-                // we only need to consider busy threads thanks to the SC fence.
-                //
-                // as for the busy threads, you may think that us seeing that their last seen epoch id is MIN is not enough, since that MIN may be
-                // some stale value they have from a previous reset operation. but, this actually can't happen due to the increment that we perform
-                // right after this wait, where we increment to MIN+2 and once again wait for everyone to update to MIN+2.
-                //
-                // this guarantees that after that increment, every thread will either see MIN+2 or be sleeping but guaranteed to see MIN+2 when he
-                // wakes up.
-                wait_for_running_threads_to_see_epoch_id(
-                    |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN,
-                    false,
-                )
-                .await;
+    // increment the epoch id once, to move it away from the reset value.
+    // this prevents threads from holding a stale reset value in their state, which may then confuse future reset operations by making
+    // them think that a thread saw their reset even though he has the reset value from a previous reset operation.
+    epoch_id_set(
+        EPOCH_ID_MIN + 2,
+        // we want release ordering since this basically represent the epoch id increment, but simpler, since we know what the current
+        // value of the epoch id is. see comment in `epoch_id_inc` explaining why release is needed for this operation.
+        atomic::Ordering::Release,
+    );
 
-                // increment the epoch id once, to move it away from the reset value.
-                // this prevents threads from holding a stale reset value in their state, which may then confuse future reset operations by making
-                // them think that a thread saw their reset even though he has the reset value from a previous reset operation.
-                epoch_id_set(
-                    EPOCH_ID_MIN + 2,
-                    // we want release ordering since this basically represent the epoch id increment, but simpler, since we know what the current
-                    // value of the epoch id is. see comment in `epoch_id_inc` explaining why release is needed for this operation.
-                    atomic::Ordering::Release,
-                );
+    // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
+    // performs that SC fence for us.
 
-                // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
-                // performs that SC fence for us.
+    // wait for all threads to see the epoch id increment, and to move away from the reset value.
+    // we only need to consider busy threads thanks to the SC fence.
+    //
+    // note that here, like in the non-reset increment path, we also need to wait for the calling thread. see the non-reset
+    // wait for more info on why this is needed.
+    wait_for_running_threads_to_see_epoch_id(
+        |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN + 2,
+        true,
+    )
+    .await;
 
-                // wait for all threads to see the epoch id increment, and to move away from the reset value.
-                // we only need to consider busy threads thanks to the SC fence.
-                //
-                // note that here, like in the non-reset increment path, we also need to wait for the calling thread. see the non-reset
-                // wait for more info on why this is needed.
-                wait_for_running_threads_to_see_epoch_id(
-                    |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN + 2,
-                    true,
-                )
-                .await;
-
-                // note that at this point, we have basically waited (at least) a grace period, since we incremented the epoch id and waited
-                // for everyone to see it.
-                //
-                // furthermore, note that the grace period also applies to all non-leader waiters that are in reset mode with us, since when
-                // we locked the reset lock for writing, we were guaranteed that we see all of their previous memory writes, and we performed
-                // the grace period after locking that lock.
-                // so, we can just notify them that the grace period is over, and they don't to do any more work.
-
-                // now that we finished resetting the epoch id, we can now let new waiters in.
-                drop(reset_sync_write_guard);
-
-                // wake all non-leader waiters that are in reset mode waiting for us to finish.
-                RESET_FINISHED_NOTIFICATION.notify();
-            } else {
-                // start listening to reset notification from the leader.
-                //
-                // this must be done before dropping the read lock, so that the leader doesn't start acting before we are listening
-                // to notifications from him.
-                //
-                // as for the overflow behaviour of `notified`, the time window where we hold the returned future before awaiting it
-                // is very small, so we shouldn't expect overflow to occur here.
-                let event = RESET_FINISHED_NOTIFICATION.notified();
-
-                // let the leader start doing its thing.
-                drop(reset_sync_read_guard);
-
-                // wait for the leader to finish the reset operation and notify us.
-                event.await;
-
-                // the waiter performed the grace period for us, so we are done.
-            }
-        }
-    };
+    // note that at this point, we have basically waited (at least) a grace period, since we incremented the epoch id and waited
+    // for everyone to see it.
 }
 
 /// wait for all threads in the process other than the current thread to see some epoch id as implemented in the given predicate
