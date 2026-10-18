@@ -152,7 +152,7 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
                         // slow path: some of the info needs updating, we need to lock the subscriber info for writing.
 
                         // first drop the original read lock
-                        let _ = subscriber_info_opt;
+                        drop(subscriber_info_opt);
 
                         // now lock for writing
                         let mut subscriber_info_opt = SUBSCRIBER_INFO.write();
@@ -300,7 +300,7 @@ fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
     }
 
     // at this point, we know we want to wake the current subscriber, so we now need to lock the subscriber info for writing.
-    let _ = subscriber_info;
+    drop(subscriber_info_opt);
     let mut subscriber_info_opt = SUBSCRIBER_INFO.write();
 
     // we need to re-check the subscriber info, since between the time we dropped the read lock and the time we acquired the write lock, it may
