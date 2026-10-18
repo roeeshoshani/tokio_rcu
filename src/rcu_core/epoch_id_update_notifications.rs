@@ -1,12 +1,14 @@
 // TODO: add module level docs
 
-use std::task::{Poll, Waker};
+use std::{
+    pin::Pin,
+    task::{Poll, Waker},
+};
 
 use crate::{
     loom::{
         static_or_loom_lazy_static,
         std::{
-            pin::Pin,
             sync::atomic::{self, AtomicBool, AtomicUsize},
             thread::{self, ThreadId},
         },
