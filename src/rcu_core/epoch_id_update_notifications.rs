@@ -96,7 +96,6 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
             num_notifications_snapshot: NUM_NOTIFICATIONS.load(
                 // no special ordering is needed here, since this is only synchronizing with old notifiers, and we don't care about them, only
                 // new notifiers which actually wake us up are relevant.
-                // TODO: is it ok that we don't synchronize with old notifiers? think this through
                 atomic::Ordering::Relaxed,
             ),
             had_already_registered: false,
