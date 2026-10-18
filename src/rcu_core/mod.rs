@@ -7,19 +7,12 @@ mod qs_read_mostly_data;
 mod rcu_read_lock;
 mod thread_state;
 
-#[cfg(not(loom))]
-use std::task::Waker;
-use std::{ptr::null_mut, task::Poll};
-
 pub use rcu_read_lock::{RcuReadLockGuard, rcu_read_lock, rcu_read_lock_unchecked};
 
 use crate::{
     loom::{
         static_or_loom_lazy_static,
-        std::{
-            sync::atomic::{self, AtomicBool, AtomicPtr, AtomicUsize},
-            thread::{self, ThreadId},
-        },
+        std::sync::atomic::{self, AtomicUsize},
     },
     rcu_core::{
         epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_set},
@@ -54,7 +47,7 @@ static_or_loom_lazy_static! {
         tokio::sync::Mutex::const_new(GPSerializationMutexMarker);
 
     // TODO
-    static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(1);
+    static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     // TODO
     static GP_FINISHED_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -90,7 +83,7 @@ pub async fn synchronize_rcu() {
         1,
         // TODO: ordering (this should probably be release, see comment when reloading this counter)
         atomic::Ordering::Relaxed,
-    );
+    ) + 1;
 
     // enter the critical section which is serialized between all tasks waiting for grace periods.
     let gp_serialization_guard = GP_SERIALIZATION_MUTEX.lock().await;
