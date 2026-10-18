@@ -152,7 +152,7 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
                         // slow path: some of the info needs updating, we need to lock the subscriber info for writing.
 
                         // first drop the original read lock
-                        let _ = subscriber_info;
+                        let _ = subscriber_info_opt;
 
                         // now lock for writing
                         let mut subscriber_info_opt = SUBSCRIBER_INFO.write();
