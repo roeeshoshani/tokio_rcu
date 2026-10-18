@@ -9,11 +9,14 @@ use crate::{
     loom::{
         static_or_loom_lazy_static,
         std::{
-            sync::atomic::{self, AtomicBool, AtomicUsize},
+            sync::atomic::{self, AtomicUsize},
             thread::{self, ThreadId},
         },
     },
-    rcu_core::GPSerializationMutexMarker,
+    rcu_core::{
+        GPSerializationMutexMarker,
+        qs_read_mostly_data::epoch_id_update_notifications_has_subscriber,
+    },
 };
 
 static_or_loom_lazy_static! {
@@ -22,17 +25,6 @@ static_or_loom_lazy_static! {
     /// this value safely wraps around on overflow, while still maintaining the correctness of the algorithm, except for
     /// very extreme cases, which must be dealt with by users of this primitive, and are not our concern here.
     static NUM_NOTIFICATIONS: AtomicUsize = AtomicUsize::new(0);
-
-    /// a hint on whether there currently is any subscriber.
-    ///
-    /// if this reads as false, notifiers can assume that there is no currently active subscriber and can just do nothing.
-    /// if this reads as true, there may or may not actually be an active subscriber, but notifiers must manually check [`SUBSCRIBER_INFO`] to see.
-    ///
-    /// this is used as an optimization, so that in the case where there is no active subscriber, the notify operations is read only, and does not
-    /// perform any writes to shared memory, which keeps it extremely fast, especially when multiple cpu cores simultanously perform many notify
-    /// operations.
-    // TODO: move to qs read mostly data
-    static HAS_SUBSCRIBER: AtomicBool = AtomicBool::new(false);
 
     /// full information about the currently active subscriber.
     static SUBSCRIBER_INFO: crate::loom::parking_lot::RwLock<Option<SubscriberInfo>> = crate::loom::parking_lot::RwLock::new(None);
@@ -93,7 +85,7 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
     fn new(
         gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
     ) -> Self {
-        HAS_SUBSCRIBER.store(
+        epoch_id_update_notifications_has_subscriber().store(
             true,
             // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
             atomic::Ordering::Relaxed,
@@ -235,7 +227,7 @@ impl<'a> Drop for EpochIdNotificationsSubscriber<'a> {
         // as an optimization, we can skip this write to shared memory if someone had consumed our waker, since in that case, that someone had
         // already reset the flag to false for us.
         if !self.did_someone_consume_my_subscriber_info {
-            HAS_SUBSCRIBER.store(
+            epoch_id_update_notifications_has_subscriber().store(
                 false,
                 // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
                 atomic::Ordering::Relaxed,
@@ -258,7 +250,7 @@ pub fn thread_epoch_updated_notify_except_cur_thread() {
 }
 
 fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
-    if !HAS_SUBSCRIBER.load(
+    if !epoch_id_update_notifications_has_subscriber().load(
         // we don't need any ordering here, since we don't need any synchronization with writers of this variable.
         //
         // there are 2 types of writers to this variable: the waiter that registers and unregisters himself, and other
@@ -324,7 +316,7 @@ fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
     subscriber_info_owned.waker.wake();
 
     // the single subscriber has been woken up by us, so there is no longer any subscriber.
-    HAS_SUBSCRIBER.store(
+    epoch_id_update_notifications_has_subscriber().store(
         false,
         // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
         atomic::Ordering::Relaxed,

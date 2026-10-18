@@ -3,7 +3,7 @@
 use crossbeam_utils::CachePadded;
 
 use crate::{
-    loom::{fn_const_if_not_loom, static_or_loom_lazy_static},
+    loom::{fn_const_if_not_loom, static_or_loom_lazy_static, std::sync::atomic::AtomicBool},
     rcu_core::epoch::{EPOCH_ID_MIN, EpochId},
     utils::atomic_type::Atomic,
 };
@@ -24,6 +24,16 @@ struct QsReadMostlyData {
     /// value and publish their last seen epoch id.
     /// a waiter can then increment it and wait until all threads see his increment in their last seen epoch id value.
     cur_epoch_id: Atomic<EpochId>,
+
+    /// a hint on whether there currently is any subscriber to the epoch id update notifications.
+    ///
+    /// if this reads as false, notifiers can assume that there is no currently active subscriber and can just do nothing.
+    /// if this reads as true, there may or may not actually be an active subscriber, but notifiers must manually check `SUBSCRIBER_INFO` to see.
+    ///
+    /// this is used as an optimization, so that in the case where there is no active subscriber, the notify operations is read only, and does not
+    /// perform any writes to shared memory, which keeps it extremely fast, especially when multiple cpu cores simultanously perform many notify
+    /// operations.
+    epoch_id_update_notifications_has_subscriber: AtomicBool,
 }
 impl QsReadMostlyData {
     fn_const_if_not_loom! {
@@ -33,6 +43,7 @@ impl QsReadMostlyData {
                 // track which threads saw the reset value. we don't want the initial value to look like a reset value, since that could cause
                 // a stale epoch id value sampled at the start of the program to look like a reset value.
                 cur_epoch_id: Atomic::<EpochId>::new(EPOCH_ID_MIN + 2),
+                epoch_id_update_notifications_has_subscriber: AtomicBool::new(false),
             }
         }
     }
@@ -42,6 +53,12 @@ impl QsReadMostlyData {
 #[inline(always)]
 pub fn cur_epoch_id() -> &'static Atomic<EpochId> {
     &QS_READ_MOSTLY_DATA.cur_epoch_id
+}
+
+/// accessor to the field inside the qs read mostly data object.
+#[inline(always)]
+pub fn epoch_id_update_notifications_has_subscriber() -> &'static AtomicBool {
+    &QS_READ_MOSTLY_DATA.epoch_id_update_notifications_has_subscriber
 }
 
 static_or_loom_lazy_static! {
