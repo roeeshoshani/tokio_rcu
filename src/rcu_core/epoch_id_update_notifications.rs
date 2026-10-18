@@ -1,3 +1,5 @@
+// TODO: add module level docs
+
 use std::task::{Poll, Waker};
 
 use crate::{
@@ -13,45 +15,79 @@ use crate::{
 };
 
 static_or_loom_lazy_static! {
-    // TODO
+    /// the total number of notify operations ever performed.
+    /// incremented by 1 each time someone sends a notification.
+    /// this value safely wraps around on overflow, while still maintaining the correctness of the algorithm, except for
+    /// very extreme cases, which must be dealt with by users of this primitive, and are not our concern here.
     static NUM_NOTIFICATIONS: AtomicUsize = AtomicUsize::new(0);
 
-    // TODO: docs
+    /// a hint on whether there currently is any subscriber.
+    ///
+    /// if this reads as false, notifiers can assume that there is no currently active subscriber and can just do nothing.
+    /// if this reads as true, there may or may not actually be an active subscriber, but notifiers must manually check [`SUBSCRIBER_INFO`] to see.
+    ///
+    /// this is used as an optimization, so that in the case where there is no active subscriber, the notify operations is read only, and does not
+    /// perform any writes to shared memory, which keeps it extremely fast, especially when multiple cpu cores simultanously perform many notify
+    /// operations.
     // TODO: move to qs read mostly data
     static HAS_SUBSCRIBER: AtomicBool = AtomicBool::new(false);
 
-    // TODO
+    /// full information about the currently active subscriber.
     static SUBSCRIBER_INFO: crate::loom::parking_lot::RwLock<Option<SubscriberInfo>> = crate::loom::parking_lot::RwLock::new(None);
 }
 
+/// full information about the currently active subscriber.
 struct SubscriberInfo {
+    /// the subscriber's waker.
     waker: Waker,
+
+    /// the subscriber's thread id, which is the thread id of the thread on which the subscriber was last polled.
     thread_id: ThreadId,
 }
 
+/// subscribe to epoch id update notifications, returning a future which when awaited will wait for a notification.
+///
+/// when this function returns, the returned future has already properly registered itself and is listening for notifications.
+/// any notification received after this function returns, even if it wasn't `poll`ed or `await`ed yet, will be received by the
+/// returned future, and once `poll`ed it will complete immediately.
+///
+/// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you.
+///
+/// # overflow
+///
+/// note that if after the registration and before the first poll of the returned future, `usize::MAX + 1` calls to `notify` are
+/// performed, all of those wakeups would be missed, and awaiting the returned future will block, even though the `notify` calls
+/// should have woke the returned future up, since it was already registered when those calls were made.
+///
+/// this is a known limitation of the current implementation, and when using this primitive, you should be aware of it, and make sure
+/// that your code works properly even in such extreme edge cases.
 pub fn subscribe_to_epoch_id_notifications<'a>(
     gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
-) -> EpochIdNotificationsSubscription<'a> {
-    EpochIdNotificationsSubscription::new(gp_serialization_guard)
+) -> EpochIdNotificationsSubscriber<'a> {
+    EpochIdNotificationsSubscriber::new(gp_serialization_guard)
 }
 
+/// the result of a subscriber registering his subscriber info.
 enum RegisterSubscriberInfoResult {
+    /// the subscriber info was successfully registered, and is waiting for notifications.
     Ok,
+
+    /// a previous regitration of the subscriber's info has been consumed by a notifier, so the subscriber should wake up, and is finished waiting.
     WakeUp,
 }
 
-pub struct EpochIdNotificationsSubscription<'a> {
+/// a subscriber, waiting for notifications for epoch id updates.
+pub struct EpochIdNotificationsSubscriber<'a> {
     num_notifications_snapshot: usize,
 
     had_already_registered: bool,
-
     did_someone_consume_my_subscriber_info: bool,
 
     // not really used, just used to enforce that only one task is using this at any given moment.
     // this algorithm is explicitly designed to support only the single waiter case, since our gp waiters are serialized.
     _gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
 }
-impl<'a> EpochIdNotificationsSubscription<'a> {
+impl<'a> EpochIdNotificationsSubscriber<'a> {
     fn new(
         gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
     ) -> Self {
@@ -116,7 +152,7 @@ impl<'a> EpochIdNotificationsSubscription<'a> {
                         // slow path: some of the info needs updating, we need to lock the subscriber info for writing.
 
                         // first drop the original read lock
-                        drop(subscriber_info);
+                        let _ = subscriber_info;
 
                         // now lock for writing
                         let mut subscriber_info_opt = SUBSCRIBER_INFO.write();
@@ -163,7 +199,7 @@ impl<'a> EpochIdNotificationsSubscription<'a> {
     }
 }
 
-impl<'a> Future for EpochIdNotificationsSubscription<'a> {
+impl<'a> Future for EpochIdNotificationsSubscriber<'a> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
@@ -190,7 +226,7 @@ impl<'a> Future for EpochIdNotificationsSubscription<'a> {
     }
 }
 
-impl<'a> Drop for EpochIdNotificationsSubscription<'a> {
+impl<'a> Drop for EpochIdNotificationsSubscriber<'a> {
     fn drop(&mut self) {
         // reset the `HAS_SUBSCRIBER` flag back to false.
         //
@@ -209,6 +245,14 @@ impl<'a> Drop for EpochIdNotificationsSubscription<'a> {
             *SUBSCRIBER_INFO.write() = None;
         }
     }
+}
+
+pub fn thread_epoch_updated_notify() {
+    thread_epoch_updated_notify_inner(false);
+}
+
+pub fn thread_epoch_updated_notify_except_cur_thread() {
+    thread_epoch_updated_notify_inner(true);
 }
 
 fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
@@ -256,7 +300,7 @@ fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
     }
 
     // at this point, we know we want to wake the current subscriber, so we now need to lock the subscriber info for writing.
-    drop(subscriber_info);
+    let _ = subscriber_info;
     let mut subscriber_info_opt = SUBSCRIBER_INFO.write();
 
     // we need to re-check the subscriber info, since between the time we dropped the read lock and the time we acquired the write lock, it may

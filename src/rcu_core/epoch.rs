@@ -1,6 +1,5 @@
 use crate::loom::std::sync::atomic;
 use crate::rcu_core::qs_read_mostly_data::cur_epoch_id;
-use crate::utils::unlikely;
 
 /// an epoch id. valid epoch id values are all even integers greater than 0 (2,4,6,8,...).
 ///

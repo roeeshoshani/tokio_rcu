@@ -1,27 +1,37 @@
 //! the core rcu algorithm, including the logic of the different async runtime hooks, and the logic of waiting a grace period.
 
 pub(crate) mod epoch;
-mod notify;
+mod epoch_id_update_notifications;
 mod per_thread_storage;
 mod qs_read_mostly_data;
 mod rcu_read_lock;
 mod thread_state;
+
+#[cfg(not(loom))]
+use std::task::Waker;
+use std::{ptr::null_mut, task::Poll};
 
 pub use rcu_read_lock::{RcuReadLockGuard, rcu_read_lock, rcu_read_lock_unchecked};
 
 use crate::{
     loom::{
         static_or_loom_lazy_static,
-        std::sync::atomic::{self, AtomicUsize},
+        std::{
+            sync::atomic::{self, AtomicBool, AtomicPtr, AtomicUsize},
+            thread::{self, ThreadId},
+        },
     },
     rcu_core::{
         epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_set},
+        epoch_id_update_notifications::{
+            subscribe_to_epoch_id_notifications, thread_epoch_updated_notify,
+            thread_epoch_updated_notify_except_cur_thread,
+        },
         per_thread_storage::{
             this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
             this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
             thread_storage_slot_get_all,
         },
-        qs_read_mostly_data::thread_epoch_updated_notify,
         thread_state::ThreadState,
     },
     utils::{likely, unlikely},
@@ -44,13 +54,10 @@ static_or_loom_lazy_static! {
         tokio::sync::Mutex::const_new(GPSerializationMutexMarker);
 
     // TODO
-    static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(1);
 
     // TODO
     static GP_FINISHED_COUNTER: AtomicUsize = AtomicUsize::new(0);
-
-    // TODO
-    static EPOCH_ID_UPDATED_NOTIFICATIONS: AtomicUsize = AtomicUsize::new(0);
 }
 
 /// this function just performs an SC fence, but it provides special guarantees when performed directly after modifying the global
@@ -115,7 +122,7 @@ pub async fn synchronize_rcu() {
         atomic::Ordering::Relaxed,
     );
 
-    synchronize_rcu_serialized(&gp_serialization_guard);
+    synchronize_rcu_serialized(&gp_serialization_guard).await;
 
     // publish the fact that we finished the gp for all the waiters included in our gp started counter read.
     GP_FINISHED_COUNTER.store(
@@ -139,7 +146,7 @@ async fn synchronize_rcu_serialized(
         atomic::Ordering::Relaxed,
     );
 
-    if orig_epoch_id == EPOCH_ID_MAX {
+    if unlikely(orig_epoch_id == EPOCH_ID_MAX) {
         synchronize_rcu_epoch_overflow(gp_serialization_guard).await
     } else {
         synchronize_rcu_no_epoch_overflow(orig_epoch_id, gp_serialization_guard).await
@@ -149,7 +156,7 @@ async fn synchronize_rcu_serialized(
 /// the synchronize rcu logic in the case where the epoch id is not overflowed.
 async fn synchronize_rcu_no_epoch_overflow(
     orig_epoch_id: EpochId,
-    _: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
+    gp_serialization_guard: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
 ) {
     // increment the epoch id.
     //
@@ -186,13 +193,14 @@ async fn synchronize_rcu_no_epoch_overflow(
     wait_for_running_threads_to_see_epoch_id(
         |last_seen_epoch_id| last_seen_epoch_id >= new_epoch_id,
         true,
+        gp_serialization_guard,
     )
     .await;
 }
 
 /// the synchronize rcu logic in the case where the epoch id is overflowed.
 async fn synchronize_rcu_epoch_overflow(
-    _: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
+    gp_serialization_guard: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
 ) {
     // reset the epoch id
     epoch_id_set(
@@ -222,6 +230,7 @@ async fn synchronize_rcu_epoch_overflow(
     wait_for_running_threads_to_see_epoch_id(
         |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN,
         false,
+        gp_serialization_guard,
     )
     .await;
 
@@ -246,6 +255,7 @@ async fn synchronize_rcu_epoch_overflow(
     wait_for_running_threads_to_see_epoch_id(
         |last_seen_epoch_id| last_seen_epoch_id == EPOCH_ID_MIN + 2,
         true,
+        gp_serialization_guard,
     )
     .await;
 
@@ -265,6 +275,7 @@ async fn synchronize_rcu_epoch_overflow(
 async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     last_seen_epoch_id_predicate: F,
     include_calling_thread: bool,
+    gp_serialization_guard: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
 ) {
     loop {
         // start subscribing to the notified waiters event before checking the current state.
@@ -289,7 +300,9 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         //
         // as for the overflow behaviour of `notified`, the time window where we hold the returned future before awaiting it
         // is very small, so we shouldn't expect overflow to occur here.
-        let notified = thread_epoch_updated_notify().notified();
+        // TODO: update comment above
+        let epoch_notifications_subscription =
+            subscribe_to_epoch_id_notifications(gp_serialization_guard);
 
         // we need an SC fence here, paired with an SC fence in all notifiers, to prevent the following deadlock scenario:
         // we start listening by calling `notified`, then read each thread's state. the quiescent states on their side first
@@ -344,7 +357,7 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
 
         // some of the threads haven't yet seen our new epoch id.
         // so, wait for them to go through a quiescent state and see our new epoch id, or to go to sleep.
-        notified.await;
+        epoch_notifications_subscription.await;
 
         // in loom mode, add a hint to the loom model that this is a wait loop that depends on other threads to make progress
         // for this to properly continue, otherwise we get stuck in an infinite loop of not seeing the progress made by any
@@ -386,7 +399,7 @@ pub fn on_thread_stop() {
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
         // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
         atomic::fence(atomic::Ordering::SeqCst);
-        thread_epoch_updated_notify().notify();
+        thread_epoch_updated_notify();
     }
 }
 
@@ -443,7 +456,7 @@ pub fn on_thread_park() {
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
     // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
     atomic::fence(atomic::Ordering::SeqCst);
-    thread_epoch_updated_notify().notify_except_current_thread();
+    thread_epoch_updated_notify_except_cur_thread();
 }
 
 pub fn on_thread_unpark() {
@@ -507,7 +520,7 @@ pub fn on_thread_unpark() {
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
     // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
     atomic::fence(atomic::Ordering::SeqCst);
-    thread_epoch_updated_notify().notify();
+    thread_epoch_updated_notify();
 }
 
 pub fn on_before_task_poll() {
@@ -547,7 +560,7 @@ pub fn on_before_task_poll() {
 
     // see `on_thread_unpark` for more info
     atomic::fence(atomic::Ordering::SeqCst);
-    thread_epoch_updated_notify().notify();
+    thread_epoch_updated_notify();
 }
 
 pub fn on_after_task_poll() {
@@ -602,7 +615,7 @@ pub fn on_after_task_poll() {
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
         // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
         atomic::fence(atomic::Ordering::SeqCst);
-        thread_epoch_updated_notify().notify();
+        thread_epoch_updated_notify();
     }
 }
 
