@@ -1,4 +1,7 @@
-// TODO: add module level docs
+//! sending and receiving notifications about threads updating their epoch id and other related state.
+//!
+//! this module contains the logic for sending notifications from threads passing through their quiescent state logic to the single waiter that
+//! is currently performing an active grace period.
 
 use std::{
     pin::Pin,
@@ -36,6 +39,13 @@ struct SubscriberInfo {
     waker: Waker,
 
     /// the subscriber's thread id, which is the thread id of the thread on which the subscriber was last polled.
+    ///
+    /// this is used to prevent a thread from waking himself up.
+    ///
+    /// this is an implementation quirk, but it is quite important.
+    /// the rcu book-keeping logic notifies the current epoch id subscriber whenever a thread parks.
+    /// but, when the thread subscriber thread  parks in order to wait for a notification, he immediately notifies himself and wakes himself up.
+    /// to prevent this from immediately waking that thread up, we make sure that a thread can't wake itself up where relevant.
     thread_id: ThreadId,
 }
 
@@ -58,7 +68,22 @@ struct SubscriberInfo {
 pub fn subscribe_to_epoch_id_notifications<'a>(
     gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
 ) -> EpochIdNotificationsSubscriber<'a> {
-    EpochIdNotificationsSubscriber::new(gp_serialization_guard)
+    epoch_id_update_notifications_has_subscriber().store(
+        true,
+        // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
+        atomic::Ordering::Relaxed,
+    );
+
+    EpochIdNotificationsSubscriber {
+        _gp_serialization_guard: gp_serialization_guard,
+        num_notifications_snapshot: NUM_NOTIFICATIONS.load(
+            // no special ordering is needed here, since this is only synchronizing with old notifiers, and we don't care about them, only
+            // new notifiers which actually wake us up are relevant.
+            atomic::Ordering::Relaxed,
+        ),
+        had_already_registered: false,
+        did_someone_consume_my_subscriber_info: false,
+    }
 }
 
 /// the result of a subscriber registering his subscriber info.
@@ -82,29 +107,13 @@ pub struct EpochIdNotificationsSubscriber<'a> {
     _gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
 }
 impl<'a> EpochIdNotificationsSubscriber<'a> {
-    fn new(
-        gp_serialization_guard: &'a tokio::sync::MutexGuard<'a, GPSerializationMutexMarker>,
-    ) -> Self {
-        epoch_id_update_notifications_has_subscriber().store(
-            true,
-            // no ordering is needed here. see the load of `HAS_SUBSCRIBER` for more info.
-            atomic::Ordering::Relaxed,
-        );
-
-        Self {
-            _gp_serialization_guard: gp_serialization_guard,
-            num_notifications_snapshot: NUM_NOTIFICATIONS.load(
-                // no special ordering is needed here, since this is only synchronizing with old notifiers, and we don't care about them, only
-                // new notifiers which actually wake us up are relevant.
-                atomic::Ordering::Relaxed,
-            ),
-            had_already_registered: false,
-            did_someone_consume_my_subscriber_info: false,
-        }
-    }
-
+    /// checks if the current value of [`NUM_NOTIFICATIONS`] has changed since the snapshot value that was taken when we initially subscribed
+    /// for notifications.
+    ///
+    /// if this function returns `true`, which is the case when [`NUM_NOTIFICATIONS`] changed since our snapshot, this function provides acquire
+    /// memory ordering, so that we synchronize with whoever notified us.
     #[inline]
-    fn did_num_notifications_increment_since_snapshot(&self) -> bool {
+    fn did_num_notifications_change_since_snapshot(&self) -> bool {
         let new_num_notifications = NUM_NOTIFICATIONS.load(
             // no ordering here, we instead use a fence only when an ordering is really needed
             atomic::Ordering::Relaxed,
@@ -122,6 +131,12 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
         false
     }
 
+    /// register's this subscriber into the global [`SUBSCRIBER_INFO`], if not already registered.
+    ///
+    /// if already this subscriber is already registered, it updates any of its relevant fields to be up to date.
+    ///
+    /// this functions returns a result indicating either that everything went smooth, or that we detected that someone woke us up, which is the case
+    /// when we have already registered ourselves into [`SUBSCRIBER_INFO`], but our registration was consumed by a notifier.
     #[inline]
     fn register_subscriber_info(
         self: Pin<&mut Self>,
@@ -196,7 +211,7 @@ impl<'a> Future for EpochIdNotificationsSubscriber<'a> {
     type Output = ();
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> Poll<Self::Output> {
-        if self.did_num_notifications_increment_since_snapshot() {
+        if self.did_num_notifications_change_since_snapshot() {
             return Poll::Ready(());
         }
 
@@ -211,7 +226,7 @@ impl<'a> Future for EpochIdNotificationsSubscriber<'a> {
         //
         // if we don't check this, we may miss a notifier who woke us up before we registered our waker, but after we initially checked
         // the number of notifications. missing this would cause us to incorrectly yield, even though we should wake up.
-        if self.did_num_notifications_increment_since_snapshot() {
+        if self.did_num_notifications_change_since_snapshot() {
             return Poll::Ready(());
         }
 
@@ -240,10 +255,25 @@ impl<'a> Drop for EpochIdNotificationsSubscriber<'a> {
     }
 }
 
+/// notifies the currently registered subscriber, if any, that the epoch id (or any other interesting thread state) of some thread had just changed.
+///
+/// provides release memory ordering when a subscriber finishes awaiting and was woken up by you.
 pub fn thread_epoch_updated_notify() {
     thread_epoch_updated_notify_inner(false);
 }
 
+/// notifies the currently registered subscriber, if any, that the epoch id (or any other interesting thread state) of some thread had just changed,
+/// unless the current subscriber was registered by the current thread.
+///
+/// note that this may still cause a subscriber on the current thread to wake up, but it will not explicitly wake its task's waker.
+/// if that subscriber will later be polled for some other reason, it will finish its wait due to this notify calls, but
+/// this notify call will not explicitly cause it to wake up if it is currently blocking.
+///
+/// this is used when the state change being notified about can't possibly be of any interest to the current thread itself.
+/// see [`on_thread_park`](crate::rcu_core::on_thread_park) for the specific case where this is needed, and [`SubscriberInfo::thread_id`]
+/// for more info.
+///
+/// provides release memory ordering when a subscriber finishes awaiting and was woken up by you.
 pub fn thread_epoch_updated_notify_except_cur_thread() {
     thread_epoch_updated_notify_inner(true);
 }
