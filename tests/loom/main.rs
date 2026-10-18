@@ -376,7 +376,7 @@ fn read_and_write_with_reset() {
         let results = results.clone();
         move || {
             tokio_rcu::loom_tests_api::epoch_id_set(
-                tokio_rcu::loom_tests_api::EPOCH_ID_MAX - 2,
+                tokio_rcu::loom_tests_api::EPOCH_ID_MAX,
                 std::sync::atomic::Ordering::Relaxed,
             );
 
