@@ -10,19 +10,15 @@ mod thread_state;
 
 pub use rcu_read_lock::{RcuReadLockGuard, rcu_read_lock, rcu_read_lock_unchecked};
 
-#[cfg(not(loom))]
-use crate::rcu_core::notify::Notify;
 use crate::{
-    loom::{
-        static_or_loom_lazy_static,
-        std::sync::atomic::{self, AtomicUsize},
-    },
+    loom::{static_or_loom_lazy_static, std::sync::atomic},
     rcu_core::{
         epoch::{EPOCH_ID_MAX, EPOCH_ID_MIN, EpochId, epoch_id_get, epoch_id_set},
         epoch_id_update_notifications::{
             subscribe_to_epoch_id_notifications, thread_epoch_updated_notify,
             thread_epoch_updated_notify_except_cur_thread,
         },
+        notify::Notify,
         per_thread_storage::{
             this_thread_alloc_storage_slot, this_thread_dealloc_storage_slot,
             this_thread_does_have_allocated_storage_slot, this_thread_get_storage_slot_id,
@@ -30,7 +26,7 @@ use crate::{
         },
         thread_state::ThreadState,
     },
-    utils::{cold_path, likely, unlikely},
+    utils::{atomic_type::Atomic, cold_path, likely, unlikely},
 };
 
 /// a dummy type used as the inner data type of [`GRACE_PERIODS_SERIALIZATION_MUTEX`]. used to distinguish mutex guards of that mutex from
@@ -81,12 +77,12 @@ static_or_loom_lazy_static! {
     ///
     /// these allocated gp id values are then published to [`GP_FINISHED_COUNTER`] when a waiter finishes performing a grace period. that way the
     /// waiter can report which gp ids have been waiter for - all those lower than or equal to the published value.
-    static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static GP_STARTED_COUNTER: Atomic<usize> = Atomic::<usize>::new(0);
 
     /// a counter published whenever a full grace period operation is performed. the value published is a gp id value sampled from
     /// [`GP_STARTED_COUNTER`] before the gp operation started, and the published value reports which gp ids have been waiter for - all those
     /// lower than or equal to the published value.
-    static GP_FINISHED_COUNTER: AtomicUsize = AtomicUsize::new(0);
+    static GP_FINISHED_COUNTER: Atomic<usize> = Atomic::<usize>::new(0);
 }
 
 /// this function just performs an SC fence, but it provides special guarantees when performed directly after modifying the global
