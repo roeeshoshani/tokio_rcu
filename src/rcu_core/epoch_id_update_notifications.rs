@@ -44,7 +44,7 @@ struct SubscriberInfo {
     ///
     /// this is an implementation quirk, but it is quite important.
     /// the rcu book-keeping logic notifies the current epoch id subscriber whenever a thread parks.
-    /// but, when the thread subscriber thread  parks in order to wait for a notification, he immediately notifies himself and wakes himself up.
+    /// but, when the subscribing thread parks in order to wait for a notification, it immediately notifies itself and wakes itself up.
     /// to prevent this from immediately waking that thread up, we make sure that a thread can't wake itself up where relevant.
     thread_id: ThreadId,
 }
@@ -132,7 +132,7 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
         false
     }
 
-    /// register's this subscriber into the global [`SUBSCRIBER_INFO`], if not already registered.
+    /// registers this subscriber into the global [`SUBSCRIBER_INFO`], if not already registered.
     ///
     /// if already this subscriber is already registered, it updates any of its relevant fields to be up to date.
     ///
@@ -157,6 +157,7 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
 
                     if is_tid_good && is_waker_good {
                         // fast path: we can re-use the existing waker and thread id, and we don't need to lock the subscriber info for writing.
+                        RegisterSubscriberInfoResult::Ok
                     } else {
                         // slow path: some of the info needs updating, we need to lock the subscriber info for writing.
 
@@ -165,19 +166,37 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
 
                         // now lock for writing
                         let mut subscriber_info_opt = SUBSCRIBER_INFO.write();
-                        // SAFETY: we already know that it is not `None`, and no-one could have written to it since we dropped the read lock, since
-                        // the gp serialization guard ensures we have exclusive access.
-                        let subscriber_info =
-                            unsafe { subscriber_info_opt.as_mut().unwrap_unchecked() };
-                        if !is_tid_good {
-                            subscriber_info.thread_id = cur_tid;
-                        }
-                        if !is_waker_good {
-                            subscriber_info.waker = cur_waker.clone();
+
+                        // re-check the subscriber info, since a notifier may have consumed it between dropping the read lock and acquiring the
+                        // write lock.
+                        match subscriber_info_opt.as_mut() {
+                            Some(subscriber_info) => {
+                                // our previously observed subscriber info is still intact. note that it couldn't have been modified in any way
+                                // other than being consumed, since the gp serialization guard ensures we have exclusive access.
+                                // so, we don't need to re-check its fields, we can re-use our old observations about them.
+                                if !is_tid_good {
+                                    subscriber_info.thread_id = cur_tid;
+                                }
+                                if !is_waker_good {
+                                    subscriber_info.waker = cur_waker.clone();
+                                }
+
+                                RegisterSubscriberInfoResult::Ok
+                            }
+                            None => {
+                                // someone just consumed our registration and woke us up during the short window between unlocking
+                                // the read lock and locking the write lock. so, we are done waiting.
+
+                                // SAFETY: we don't move out of self
+                                unsafe {
+                                    self.get_unchecked_mut()
+                                        .did_someone_consume_my_subscriber_info = true
+                                };
+
+                                RegisterSubscriberInfoResult::WakeUp
+                            }
                         }
                     }
-
-                    RegisterSubscriberInfoResult::Ok
                 }
                 None => {
                     // we registered ourselves, and someone consumed that info. this means someone notified us, so we are done waiting.
@@ -223,7 +242,7 @@ impl<'a> Future for EpochIdNotificationsSubscriber<'a> {
 
         // before actually going to sleep, check the num notifications again.
         //
-        // this is needed because since we last checked, during the time we registered our waker, someone may had woke us up.
+        // this is needed because since we last checked, during the time we registered our waker, someone may have woken us up.
         //
         // if we don't check this, we may miss a notifier who woke us up before we registered our waker, but after we initially checked
         // the number of notifications. missing this would cause us to incorrectly yield, even though we should wake up.
@@ -305,7 +324,7 @@ fn thread_epoch_updated_notify_inner(skip_waiter_if_current_thread: bool) {
         // use release ordering to synchronize with the waiter, such that if the waiter sees our increment, it guarantees a happens before
         // relationship in relation to all of our previous memory writes.
         //
-        // not relevant to this primitive itself, but relevant to users of this primitive. atomic::Ordering::Release,
+        // not relevant to this primitive itself, but relevant to users of this primitive.
         atomic::Ordering::Release,
     );
 

@@ -29,17 +29,15 @@ use crate::{
     utils::{atomic_type::Atomic, cold_path, likely, unlikely},
 };
 
-/// a dummy type used as the inner data type of [`GRACE_PERIODS_SERIALIZATION_MUTEX`]. used to distinguish mutex guards of that mutex from
+/// a dummy type used as the inner data type of [`GP_SERIALIZATION_MUTEX`]. used to distinguish mutex guards of that mutex from
 /// other guards.
 ///
-/// # Safety
-///
-/// must only be used as the data of the [`GRACE_PERIODS_SERIALIZATION_MUTEX`] mutex.
+/// must only be used as the data of the [`GP_SERIALIZATION_MUTEX`] mutex.
 struct GPSerializationMutexMarker;
 
 /// the identifier of a grace period operation.
 ///
-/// every grace period operations allocates an id for itself by incrementing [`GP_STARTED_COUNTER`].
+/// every grace period operation allocates an id for itself by incrementing [`GP_STARTED_COUNTER`].
 ///
 /// this id is then used to refer to the different grace period operations.
 ///
@@ -95,11 +93,11 @@ static_or_loom_lazy_static! {
     /// waiters that start after that waiter have greater gp id values.
     ///
     /// these allocated gp id values are then published to [`GP_FINISHED_COUNTER`] when a waiter finishes performing a grace period. that way the
-    /// waiter can report which gp ids have been waiter for - all those lower than or equal to the published value.
+    /// waiter can report which gp ids have been waited for - all those lower than or equal to the published value.
     static GP_STARTED_COUNTER: Atomic<GpId> = Atomic::<GpId>::new(0);
 
     /// a counter published whenever a full grace period operation is performed. the value published is a gp id value sampled from
-    /// [`GP_STARTED_COUNTER`] before the gp operation started, and the published value reports which gp ids have been waiter for - all those
+    /// [`GP_STARTED_COUNTER`] before the gp operation started, and the published value reports which gp ids have been waited for - all those
     /// lower than or equal to the published value.
     static GP_FINISHED_COUNTER: Atomic<GpId> = Atomic::<GpId>::new(0);
 }
@@ -158,7 +156,7 @@ pub async fn synchronize_rcu() {
                     // this ensures that any existing gp waiters finish their gp, and that new waiters block until we finish, so we have absolute
                     // exclusive access over the global state during the reset operation.
                     //
-                    // once this the reset sync lock is write-locked, every other waiter is in one of two possible states:
+                    // once the reset sync lock is write-locked, every other waiter is in one of two possible states:
                     // - just started the gp operation and is blocked waiting for the initial read lock operation of the reset sync lock.
                     // - entered "slave" reset mode, and is blocked waiting for a reset done notification from us.
                     drop(reset_sync_read_guard);
@@ -218,10 +216,6 @@ pub async fn synchronize_rcu() {
         // the gp is actually performed for us.
         atomic::fence(atomic::Ordering::Acquire);
 
-        // since we are not the ones who did the work, it is expected that the finished counter is actually greater than our counter in this case,
-        // and never equal.
-        debug_assert_ne!(gp_finished_counter, my_gp_counter);
-
         // someone did the work for us, we are done.
         return;
     }
@@ -235,7 +229,7 @@ pub async fn synchronize_rcu() {
     // them as well, and give them the memory ordering guarantees that they need in regards to writes performed by them before they started the grace
     // period.
     let gp_started_counter = GP_STARTED_COUNTER.load(
-        // we need acquire ordering to make sure that wee see all writes performed by other gp waiters before they started their gp, so that we
+        // we need acquire ordering to make sure that we see all writes performed by other gp waiters before they started their gp, so that we
         // can perform the gp for them as well.
         atomic::Ordering::Acquire,
     );
@@ -251,7 +245,7 @@ pub async fn synchronize_rcu() {
         atomic::Ordering::Release,
     );
 
-    // this makes sure that the guard is help up until this point and is not accidentally dropped earlier than needed.
+    // this makes sure that the guard is held up until this point and is not accidentally dropped earlier than needed.
     drop(gp_serialization_guard);
 
     // the reset sync guard must be held all the way up to this point, as it is assumed to be protecting the entire grace period operation,
@@ -259,7 +253,7 @@ pub async fn synchronize_rcu() {
     drop(reset_sync_read_guard);
 }
 
-/// actually performs the core logic of the grace period operation, which must be serialized using the [`GRACE_PERIODS_SERIALIZATION_MUTEX`] mutex
+/// actually performs the core logic of the grace period operation, which must be serialized using the [`GP_SERIALIZATION_MUTEX`] mutex
 /// such that only one task is working performing a grace period at any given moment.
 async fn synchronize_rcu_serialized(
     gp_serialization_guard: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
@@ -521,7 +515,7 @@ pub fn on_thread_stop() {
         // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected pointers.
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-        // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
+        // deadlocks in the waiters. see the SC fence in `wait_for_running_threads_to_see_epoch_id`.
         atomic::fence(atomic::Ordering::SeqCst);
         thread_epoch_updated_notify();
     }
@@ -556,10 +550,10 @@ pub fn on_thread_park() {
     // wake them so that they will see that we are no longer busy and thus we are no longer using any of their rcu protected
     // pointers.
     //
-    // note that we specifically use `notify_except_current_thread` to avoid having a thread wake itself up immediately as it tries to park.
-    // consider the scenario where a thread starts waiting for a notification on the `thread_epoch_updated_notify` object. the thread starts
-    // waiting and parks itself. when it parks, this park hook is called, and immediately calls notify on the same `Notify` object that this
-    // thread itself just started waiting for. this causes the thread itself to wake itself up as soon as it tried to park, preventing the thread
+    // note that we specifically use `thread_epoch_updated_notify_except_cur_thread` to avoid having a thread wake itself up immediately as it tries to park.
+    // consider the scenario where a thread starts waiting for a notification from the epoch id notification mechanism. the thread starts
+    // waiting and parks itself. when it parks, this park hook is called, and immediately performs a notification on the same
+    // notification mechanism that this thread itself just started waiting for. this causes the thread itself to wake itself up as soon as it tried to park, preventing the thread
     // from properly parking and waiting for a notification.
     //
     // so, we use a version of the notify which doesn't wake waiter futures that were last polled on the current thread. this clearly prevents
@@ -578,7 +572,7 @@ pub fn on_thread_park() {
     // so, having the thread wake itself up when it parks is unnecessary in every possible scenario.
     //
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
+    // deadlocks in the waiters. see the SC fence in `wait_for_running_threads_to_see_epoch_id`.
     atomic::fence(atomic::Ordering::SeqCst);
     thread_epoch_updated_notify_except_cur_thread();
 }
@@ -642,7 +636,7 @@ pub fn on_thread_unpark() {
     // waiting for us to see their new epoch id.
     //
     // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-    // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
+    // deadlocks in the waiters. see the SC fence in `wait_for_running_threads_to_see_epoch_id`.
     atomic::fence(atomic::Ordering::SeqCst);
     thread_epoch_updated_notify();
 }
@@ -737,7 +731,7 @@ pub fn on_after_task_poll() {
         // if the last seen epoch id changed, some waiter may now be able to finish waiting. so, notify all waiters.
         //
         // before performing the notify, we must issue an SC fence, paired with an SC fence in the synchronize rcu logic, to prevent
-        // deadlocks in the waiters. see the SC fence in synchronize rcu after calling `thread_epoch_updated_notify().notified()`.
+        // deadlocks in the waiters. see the SC fence in `wait_for_running_threads_to_see_epoch_id`.
         atomic::fence(atomic::Ordering::SeqCst);
         thread_epoch_updated_notify();
     }
