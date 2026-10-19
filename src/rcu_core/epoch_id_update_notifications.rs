@@ -79,7 +79,7 @@ pub fn subscribe_to_epoch_id_notifications<'a>(
         _gp_serialization_guard: gp_serialization_guard,
         num_notifications_snapshot: NUM_NOTIFICATIONS.load(
             // use acquire ordering to ensure that we also synchronize with every notifier who sent a notification even before the one who will
-            // eventually wake us up. this is not important to the core algorithm itself, but is important for users of the primitve.
+            // eventually wake us up. this is not important to the core algorithm itself, but is important for users of the primitive.
             atomic::Ordering::Acquire,
         ),
         had_already_registered: false,
@@ -92,7 +92,7 @@ enum RegisterSubscriberInfoResult {
     /// the subscriber info was successfully registered, and is waiting for notifications.
     Ok,
 
-    /// a previous regitration of the subscriber's info has been consumed by a notifier, so the subscriber should wake up, and is finished waiting.
+    /// a previous registration of the subscriber's info has been consumed by a notifier, so the subscriber should wake up, and is finished waiting.
     WakeUp,
 }
 
@@ -199,7 +199,7 @@ impl<'a> EpochIdNotificationsSubscriber<'a> {
                 thread_id: thread::current().id(),
             });
 
-            // mark that we have registered outselves.
+            // mark that we have registered ourselves.
             // SAFETY: we don't move out of self
             unsafe { self.get_unchecked_mut().had_already_registered = true };
 

@@ -31,7 +31,7 @@ struct QsReadMostlyData {
     /// if this reads as true, there may or may not actually be an active subscriber, but notifiers must manually check `SUBSCRIBER_INFO` to see.
     ///
     /// this is used as an optimization, so that in the case where there is no active subscriber, the notify operations is read only, and does not
-    /// perform any writes to shared memory, which keeps it extremely fast, especially when multiple cpu cores simultanously perform many notify
+    /// perform any writes to shared memory, which keeps it extremely fast, especially when multiple cpu cores simultaneously perform many notify
     /// operations.
     epoch_id_update_notifications_has_subscriber: AtomicBool,
 }

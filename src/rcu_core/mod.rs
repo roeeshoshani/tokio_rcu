@@ -210,7 +210,7 @@ pub async fn synchronize_rcu() {
     // re-load the gp started counter.
     // this ensures that when we perform the actual grace period work below, we do the work for all current waiters in addition to doing it for
     // ourselves.
-    // note that we may have slept for a while since the last time we read this counter, which was when we incrmeneted it. since then, other waiters
+    // note that we may have slept for a while since the last time we read this counter, which was when we incremented it. since then, other waiters
     // may have also incremented it.
     // if we see their increments, we also see all writes they performed before it, so when we perform our grace period, we basically perform it for
     // them as well, and give them the memory ordering guarantees that they need in regards to writes performed by them before they started the grace
