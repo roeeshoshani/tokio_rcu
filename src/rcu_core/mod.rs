@@ -2,6 +2,7 @@
 
 pub(crate) mod epoch;
 mod epoch_id_update_notifications;
+mod notify;
 mod per_thread_storage;
 mod qs_read_mostly_data;
 mod rcu_read_lock;
@@ -9,6 +10,8 @@ mod thread_state;
 
 pub use rcu_read_lock::{RcuReadLockGuard, rcu_read_lock, rcu_read_lock_unchecked};
 
+#[cfg(not(loom))]
+use crate::rcu_core::notify::Notify;
 use crate::{
     loom::{
         static_or_loom_lazy_static,
@@ -51,7 +54,7 @@ static_or_loom_lazy_static! {
 
     // TODO: docs
     // TODO: should i re-use my old notify code? is it better performing?
-    static GP_COUNTER_RESET_FINISHED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+    static GP_COUNTER_RESET_FINISHED: Notify = Notify::new();
 
     // TODO
     static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -113,7 +116,7 @@ pub async fn synchronize_rcu() {
                     );
                     drop(reset_sync_write_guard);
                     reset_sync_read_guard = GP_COUNTER_RESET_SYNC_LOCK.read().await;
-                    GP_COUNTER_RESET_FINISHED.notify_waiters();
+                    GP_COUNTER_RESET_FINISHED.notify();
                 } else {
                     break my_gp_counter;
                 }
