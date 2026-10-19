@@ -55,7 +55,8 @@ struct SubscriberInfo {
 /// any notification received after this function returns, even if it wasn't `poll`ed or `await`ed yet, will be received by the
 /// returned future, and once `poll`ed it will complete immediately.
 ///
-/// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you.
+/// when you are finished awaiting the returned future, it provides acquire memory ordering against the notifier who notified you,
+/// and any notifier who ever notified before him.
 ///
 /// # overflow
 ///
@@ -77,9 +78,9 @@ pub fn subscribe_to_epoch_id_notifications<'a>(
     EpochIdNotificationsSubscriber {
         _gp_serialization_guard: gp_serialization_guard,
         num_notifications_snapshot: NUM_NOTIFICATIONS.load(
-            // no special ordering is needed here, since this is only synchronizing with old notifiers, and we don't care about them, only
-            // new notifiers which actually wake us up are relevant.
-            atomic::Ordering::Relaxed,
+            // use acquire ordering to ensure that we also synchronize with every notifier who sent a notification even before the one who will
+            // eventually wake us up. this is not important to the core algorithm itself, but is important for users of the primitve.
+            atomic::Ordering::Acquire,
         ),
         had_already_registered: false,
         did_someone_consume_my_subscriber_info: false,
