@@ -30,7 +30,7 @@ use crate::{
         },
         thread_state::ThreadState,
     },
-    utils::{likely, unlikely},
+    utils::{cold_path, likely, unlikely},
 };
 
 /// a dummy type used as the inner data type of [`GRACE_PERIODS_SERIALIZATION_MUTEX`]. used to distinguish mutex guards of that mutex from
@@ -168,6 +168,8 @@ pub async fn synchronize_rcu() {
                 }
             }
             Err(_) => {
+                cold_path();
+
                 // the gp started counter is already at max. in this case, there must be an ongoing reset operation happening.
                 // so, we need to wait for it to finish, then retry.
 

@@ -61,13 +61,13 @@ unsafe impl<T: Sync> Sync for PtrMutSendSync<T> {}
 /// a cold and empty function used to mark cold paths in code.
 #[cold]
 #[inline(always)]
-const fn cold_and_empty() {}
+pub const fn cold_path() {}
 
 /// given a condition, returns that same condition, but with a hint to the compiler that the condition is most likely true.
 #[inline(always)]
 pub const fn likely(cond: bool) -> bool {
     if !cond {
-        cold_and_empty();
+        cold_path();
     }
     cond
 }
@@ -76,7 +76,7 @@ pub const fn likely(cond: bool) -> bool {
 #[inline(always)]
 pub const fn unlikely(cond: bool) -> bool {
     if cond {
-        cold_and_empty();
+        cold_path();
     }
     cond
 }
