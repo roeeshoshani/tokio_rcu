@@ -246,7 +246,7 @@ all tests stop running and no diagnostics are reported. with `cargo-nextest`, su
 sadly, `cargo-nextest` currently does not support running doctests, so we must run them separately. note that `cargo test --doc`
 already runs each test in its own process, so luckily for us, we don't need `cargo-nextest` for process isolation in this case.
 
-furthermore, `cargo-all-features` is used to also test the crate under the `small_epoch_id` feature flag, which is for testing mode
+furthermore, `cargo-all-features` is used to also test the crate under the `test_mode` feature flag, which is for testing mode
 only, and allows testing some internal edge cases of this crate which are extremely hard to reach in the default configuration.
 
 it is also recommended to run the tests in release mode since it increases the probability of being able to find race conditions and

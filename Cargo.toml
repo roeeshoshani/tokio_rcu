@@ -26,10 +26,9 @@ spin = "0.12.3"
 tokio = { version = "1.53.1", features = ["full"] }
 
 [features]
-# a feature flag which when enabled, makes the epoch id smaller.
-# this is mainly used for testing, since using a small epoch id makes it easier to overflow it in a reasonable time.
-# this is used to check that the code for dealing with the overflow of the epoch id works properly.
-small_epoch_id = []
+# a testing related feature flag.
+# do not use in production, only used for testing.
+test_mode = []
 
 [[bench]]
 name = "comparison"

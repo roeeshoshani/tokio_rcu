@@ -8,8 +8,8 @@ use crate::rcu_core::qs_read_mostly_data::cur_epoch_id;
 /// the fact that all epoch ids are even allows us to encode information in the least significant bit.
 /// and, the fact that the epoch id is non-zero allows us to encode an empty thread state value as just a 0 value.
 pub type EpochId = cfg_select! {
-    feature = "small_epoch_id" => {
-        // the small epoch id config is used for the integration tests, for testing the logic handling the epoch id overflow.
+    feature = "test_mode" => {
+        // the test mode config is used for the integration tests, for testing the logic handling the epoch id overflow.
         // the default epoch id is too big to overflow during the tests (it would take a lot of time to overflow it).
         // this config shrinks the size of the epoch id so that it becomes reasonable to overflow it during the tests, for making sure
         // that the overflow handling logic works fine.
