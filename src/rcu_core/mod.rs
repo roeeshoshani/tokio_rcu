@@ -262,8 +262,10 @@ async fn synchronize_rcu_no_epoch_overflow(
     let new_epoch_id = orig_epoch_id + 2;
     epoch_id_set(
         new_epoch_id,
-        // TODO: ordering (probably release)
-        atomic::Ordering::Relaxed,
+        // use release ordering to make sure that when a thread loads our epoch id value, he sees all writes performed by us before that.
+        // this ensures that when we see that thread publish that epoch id back to us, we are guaranteed that he saw all of our previous writes,
+        // for example any pointer swap we have previously performed, so he can't use that old pointer in the future any longer.
+        atomic::Ordering::Release,
     );
 
     // in theory a `post_epoch_id_modification_sc_fence` would be needed here, but the wait operation below already
@@ -371,11 +373,11 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
     gp_serialization_guard: &tokio::sync::MutexGuard<'_, GPSerializationMutexMarker>,
 ) {
     loop {
-        // start subscribing to the notified waiters event before checking the current state.
+        // subscribe to the epoch id notifications before checking the current state.
         //
         // if we first check the state and only then start listening, there may be a small window after we finish
-        // checking the values but before we start listening where some thread updates its counter and notifies
-        // all wakers, but we will miss that notification, which is problematic.
+        // checking the values but before we start listening where some thread updates its state and notifies
+        // us, but we will miss that notification, which is problematic.
         //
         // so, we start listening before checking the values, so that even notifications that are issued while
         // or right after we finished checking are still received.
@@ -386,14 +388,12 @@ async fn wait_for_running_threads_to_see_epoch_id<F: Fn(EpochId) -> bool>(
         // 1. a thread already notified before we registered.
         // 2. a thread hasn't already notified when we registered.
         // in case 1, we are guaranteed to see this thread's state update since the notify operation has release ordering, and paired
-        // with the acquire ordering of our registration, it guarantees that we see the state update as happened before the notify
+        // with the acquire ordering of our subscribe operation, it guarantees that we see the state update as happened before the subscribe
         // operation.
-        // in case 2, we are guaranteed to at some point see either the state update or the notification, since the notification
-        // hasn't yet been observed by us.
+        // in case 2, we are guaranteed to at some point see the notification, since the notification hasn't yet been observed by us.
         //
-        // as for the overflow behaviour of `notified`, the time window where we hold the returned future before awaiting it
+        // as for the overflow behaviour of the subscribe operation, the time window where we hold the returned future before awaiting it
         // is very small, so we shouldn't expect overflow to occur here.
-        // TODO: update comment above
         let epoch_notifications_subscription =
             subscribe_to_epoch_id_notifications(gp_serialization_guard);
 
