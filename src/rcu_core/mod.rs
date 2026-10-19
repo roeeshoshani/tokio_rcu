@@ -76,10 +76,16 @@ static_or_loom_lazy_static! {
     /// operation is done.
     static GP_COUNTERS_RESET_DONE: Notify = Notify::new();
 
-    // TODO
+    /// a counter incremented every time a grace period is started, used to allocate a serial "grace period id" to each waiter, such that future
+    /// waiters that start after that waiter have greater gp id values.
+    ///
+    /// these allocated gp id values are then published to [`GP_FINISHED_COUNTER`] when a waiter finishes performing a grace period. that way the
+    /// waiter can report which gp ids have been waiter for - all those lower than or equal to the published value.
     static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
-    // TODO
+    /// a counter published whenever a full grace period operation is performed. the value published is a gp id value sampled from
+    /// [`GP_STARTED_COUNTER`] before the gp operation started, and the published value reports which gp ids have been waiter for - all those
+    /// lower than or equal to the published value.
     static GP_FINISHED_COUNTER: AtomicUsize = AtomicUsize::new(0);
 }
 
