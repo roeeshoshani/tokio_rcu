@@ -146,64 +146,64 @@
 //!
 //! here are the results of running the benchmarks on my 20-core `12th Gen Intel(R) Core(TM) i7-12700` cpu:
 //! ```text
-//! Timer precision: 47 ns
+//! Timer precision: 37 ns
 //! comparison                              fastest       │ slowest       │ median        │ mean          │ samples │ iters
 //! ├─ read_only_arc_swap                                 │               │               │               │         │
-//! │  ├─ 1                                 22.33 ms      │ 34.62 ms      │ 22.82 ms      │ 23.87 ms      │ 100     │ 100
-//! │  ├─ 8                                 24.86 ms      │ 46.24 ms      │ 28.97 ms      │ 29.83 ms      │ 100     │ 100
-//! │  ├─ 16                                38.22 ms      │ 44.77 ms      │ 43.65 ms      │ 42.8 ms       │ 100     │ 100
-//! │  ├─ 32                                65.91 ms      │ 75.48 ms      │ 68.38 ms      │ 69.26 ms      │ 100     │ 100
-//! │  ╰─ 64                                129.6 ms      │ 137.4 ms      │ 133.1 ms      │ 132.9 ms      │ 100     │ 100
+//! │  ├─ 1                                 20.31 ms      │ 36.78 ms      │ 20.5 ms       │ 20.84 ms      │ 100     │ 100
+//! │  ├─ 8                                 21.94 ms      │ 29.48 ms      │ 23.65 ms      │ 24.36 ms      │ 100     │ 100
+//! │  ├─ 16                                35.45 ms      │ 44.02 ms      │ 39.69 ms      │ 39.41 ms      │ 100     │ 100
+//! │  ├─ 32                                65.53 ms      │ 70.1 ms       │ 66.73 ms      │ 66.93 ms      │ 100     │ 100
+//! │  ╰─ 64                                129.5 ms      │ 136.8 ms      │ 130.9 ms      │ 131.3 ms      │ 100     │ 100
 //! ├─ read_only_rcu_box                                  │               │               │               │         │
-//! │  ├─ 1                                 1.005 ms      │ 6.71 ms       │ 1.806 ms      │ 2.63 ms       │ 100     │ 100
-//! │  ├─ 8                                 1.193 ms      │ 7.442 ms      │ 2.384 ms      │ 2.733 ms      │ 100     │ 100
-//! │  ├─ 16                                1.29 ms       │ 4.381 ms      │ 2.521 ms      │ 2.626 ms      │ 100     │ 100
-//! │  ├─ 32                                1.811 ms      │ 3.923 ms      │ 1.992 ms      │ 2.166 ms      │ 100     │ 100
-//! │  ╰─ 64                                3.173 ms      │ 4.016 ms      │ 3.427 ms      │ 3.496 ms      │ 100     │ 100
+//! │  ├─ 1                                 630.6 µs      │ 920.6 µs      │ 655.1 µs      │ 668.9 µs      │ 100     │ 100
+//! │  ├─ 8                                 629.9 µs      │ 1.788 ms      │ 1.137 ms      │ 1.079 ms      │ 100     │ 100
+//! │  ├─ 16                                938.3 µs      │ 1.733 ms      │ 1.124 ms      │ 1.125 ms      │ 100     │ 100
+//! │  ├─ 32                                1.5 ms        │ 2.566 ms      │ 1.755 ms      │ 1.744 ms      │ 100     │ 100
+//! │  ╰─ 64                                2.908 ms      │ 3.997 ms      │ 3.189 ms      │ 3.3 ms        │ 100     │ 100
 //! ├─ read_while_writing_arc_swap                        │               │               │               │         │
-//! │  ├─ 1 reader tasks, 1 writer tasks    24.81 ms      │ 29.73 ms      │ 25.46 ms      │ 26.09 ms      │ 100     │ 100
-//! │  ├─ 8 reader tasks, 1 writer tasks    27.52 ms      │ 46.04 ms      │ 33.75 ms      │ 34.25 ms      │ 100     │ 100
-//! │  ├─ 8 reader tasks, 2 writer tasks    35.69 ms      │ 58.73 ms      │ 39.27 ms      │ 40.4 ms       │ 100     │ 100
-//! │  ├─ 16 reader tasks, 1 writer tasks   50.47 ms      │ 60.23 ms      │ 55.65 ms      │ 55.25 ms      │ 100     │ 100
-//! │  ├─ 16 reader tasks, 2 writer tasks   58.23 ms      │ 79.99 ms      │ 67.49 ms      │ 67.51 ms      │ 100     │ 100
-//! │  ├─ 32 reader tasks, 1 writer tasks   67.38 ms      │ 81.49 ms      │ 71.44 ms      │ 72.57 ms      │ 100     │ 100
-//! │  ├─ 32 reader tasks, 2 writer tasks   69.12 ms      │ 88.03 ms      │ 72.5 ms       │ 74.51 ms      │ 100     │ 100
-//! │  ├─ 64 reader tasks, 1 writer tasks   130.8 ms      │ 140 ms        │ 134.5 ms      │ 134.5 ms      │ 100     │ 100
-//! │  ╰─ 64 reader tasks, 2 writer tasks   131.8 ms      │ 143.1 ms      │ 136.8 ms      │ 136.5 ms      │ 100     │ 100
+//! │  ├─ 1 reader tasks, 1 writer tasks    24.28 ms      │ 29.8 ms       │ 24.62 ms      │ 24.82 ms      │ 100     │ 100
+//! │  ├─ 8 reader tasks, 1 writer tasks    26.59 ms      │ 40.68 ms      │ 31.34 ms      │ 31.88 ms      │ 100     │ 100
+//! │  ├─ 8 reader tasks, 2 writer tasks    34.39 ms      │ 52.12 ms      │ 38.76 ms      │ 39.72 ms      │ 100     │ 100
+//! │  ├─ 16 reader tasks, 1 writer tasks   44.2 ms       │ 56.84 ms      │ 48.45 ms      │ 48.71 ms      │ 100     │ 100
+//! │  ├─ 16 reader tasks, 2 writer tasks   50 ms         │ 73.85 ms      │ 57.28 ms      │ 57.61 ms      │ 100     │ 100
+//! │  ├─ 32 reader tasks, 1 writer tasks   66.64 ms      │ 74.81 ms      │ 68.01 ms      │ 68.62 ms      │ 100     │ 100
+//! │  ├─ 32 reader tasks, 2 writer tasks   67.68 ms      │ 76.28 ms      │ 69.97 ms      │ 70.27 ms      │ 100     │ 100
+//! │  ├─ 64 reader tasks, 1 writer tasks   130.3 ms      │ 137.8 ms      │ 131.9 ms      │ 132.6 ms      │ 100     │ 100
+//! │  ╰─ 64 reader tasks, 2 writer tasks   131.1 ms      │ 142.1 ms      │ 132.9 ms      │ 133.4 ms      │ 100     │ 100
 //! ├─ read_while_writing_rcu_box                         │               │               │               │         │
-//! │  ├─ 1 reader tasks, 1 writer tasks    1.09 ms       │ 4.477 ms      │ 1.415 ms      │ 1.822 ms      │ 100     │ 100
-//! │  ├─ 8 reader tasks, 1 writer tasks    1.445 ms      │ 5.593 ms      │ 2.373 ms      │ 2.724 ms      │ 100     │ 100
-//! │  ├─ 8 reader tasks, 2 writer tasks    1.692 ms      │ 4.929 ms      │ 2.576 ms      │ 2.769 ms      │ 100     │ 100
-//! │  ├─ 16 reader tasks, 1 writer tasks   1.375 ms      │ 3.961 ms      │ 1.786 ms      │ 1.946 ms      │ 100     │ 100
-//! │  ├─ 16 reader tasks, 2 writer tasks   1.74 ms       │ 3.345 ms      │ 2.025 ms      │ 2.056 ms      │ 100     │ 100
-//! │  ├─ 32 reader tasks, 1 writer tasks   1.94 ms       │ 3.088 ms      │ 2.479 ms      │ 2.481 ms      │ 100     │ 100
-//! │  ├─ 32 reader tasks, 2 writer tasks   2.034 ms      │ 3.504 ms      │ 2.764 ms      │ 2.73 ms       │ 100     │ 100
-//! │  ├─ 64 reader tasks, 1 writer tasks   3.395 ms      │ 5.704 ms      │ 4.037 ms      │ 4.074 ms      │ 100     │ 100
-//! │  ╰─ 64 reader tasks, 2 writer tasks   3.332 ms      │ 4.919 ms      │ 4.352 ms      │ 4.263 ms      │ 100     │ 100
+//! │  ├─ 1 reader tasks, 1 writer tasks    639 µs        │ 946.6 µs      │ 664.4 µs      │ 681.6 µs      │ 100     │ 100
+//! │  ├─ 8 reader tasks, 1 writer tasks    829.4 µs      │ 1.359 ms      │ 1.06 ms       │ 1.065 ms      │ 100     │ 100
+//! │  ├─ 8 reader tasks, 2 writer tasks    776.6 µs      │ 1.385 ms      │ 1.179 ms      │ 1.123 ms      │ 100     │ 100
+//! │  ├─ 16 reader tasks, 1 writer tasks   1.041 ms      │ 1.381 ms      │ 1.298 ms      │ 1.291 ms      │ 100     │ 100
+//! │  ├─ 16 reader tasks, 2 writer tasks   1.199 ms      │ 1.595 ms      │ 1.35 ms       │ 1.35 ms       │ 100     │ 100
+//! │  ├─ 32 reader tasks, 1 writer tasks   1.747 ms      │ 9.121 ms      │ 1.938 ms      │ 2.443 ms      │ 100     │ 100
+//! │  ├─ 32 reader tasks, 2 writer tasks   1.852 ms      │ 9.16 ms       │ 2.04 ms       │ 2.111 ms      │ 100     │ 100
+//! │  ├─ 64 reader tasks, 1 writer tasks   3.179 ms      │ 4.388 ms      │ 3.531 ms      │ 3.553 ms      │ 100     │ 100
+//! │  ╰─ 64 reader tasks, 2 writer tasks   3.367 ms      │ 5.228 ms      │ 3.644 ms      │ 3.726 ms      │ 100     │ 100
 //! ├─ write_while_reading_arc_swap                       │               │               │               │         │
-//! │  ├─ 1 reader tasks, 1 writer tasks    447 µs        │ 889.9 µs      │ 534.5 µs      │ 572.5 µs      │ 100     │ 100
-//! │  ├─ 1 reader tasks, 8 writer tasks    622.1 µs      │ 1.843 ms      │ 870 µs        │ 959.1 µs      │ 100     │ 100
-//! │  ├─ 1 reader tasks, 16 writer tasks   841.5 µs      │ 4.713 ms      │ 1.96 ms       │ 2.201 ms      │ 100     │ 100
-//! │  ├─ 1 reader tasks, 32 writer tasks   1.304 ms      │ 8.912 ms      │ 2.989 ms      │ 3.186 ms      │ 100     │ 100
-//! │  ├─ 1 reader tasks, 64 writer tasks   2.711 ms      │ 10.06 ms      │ 4.755 ms      │ 5.233 ms      │ 100     │ 100
-//! │  ├─ 2 reader tasks, 2 writer tasks    510.9 µs      │ 921.8 µs      │ 656.5 µs      │ 667.8 µs      │ 100     │ 100
-//! │  ├─ 4 reader tasks, 8 writer tasks    777.4 µs      │ 2.603 ms      │ 1.518 ms      │ 1.541 ms      │ 100     │ 100
-//! │  ├─ 8 reader tasks, 8 writer tasks    1.274 ms      │ 4.425 ms      │ 2.293 ms      │ 2.441 ms      │ 100     │ 100
-//! │  ├─ 16 reader tasks, 16 writer tasks  1.845 ms      │ 10.21 ms      │ 2.272 ms      │ 3.091 ms      │ 100     │ 100
-//! │  ├─ 32 reader tasks, 32 writer tasks  4.576 ms      │ 12.01 ms      │ 6.949 ms      │ 6.731 ms      │ 100     │ 100
-//! │  ╰─ 64 reader tasks, 64 writer tasks  10.51 ms      │ 22.3 ms       │ 12.26 ms      │ 12.6 ms       │ 100     │ 100
+//! │  ├─ 1 reader tasks, 1 writer tasks    111.3 µs      │ 221.1 µs      │ 116.1 µs      │ 118.6 µs      │ 100     │ 100
+//! │  ├─ 1 reader tasks, 8 writer tasks    336 µs        │ 649.4 µs      │ 446.9 µs      │ 461.3 µs      │ 100     │ 100
+//! │  ├─ 1 reader tasks, 16 writer tasks   700.4 µs      │ 1.081 ms      │ 879 µs        │ 887.1 µs      │ 100     │ 100
+//! │  ├─ 1 reader tasks, 32 writer tasks   1.475 ms      │ 1.743 ms      │ 1.619 ms      │ 1.62 ms       │ 100     │ 100
+//! │  ├─ 1 reader tasks, 64 writer tasks   2.486 ms      │ 3.307 ms      │ 3.123 ms      │ 3.094 ms      │ 100     │ 100
+//! │  ├─ 2 reader tasks, 2 writer tasks    136.3 µs      │ 612.4 µs      │ 222.7 µs      │ 213.9 µs      │ 100     │ 100
+//! │  ├─ 4 reader tasks, 8 writer tasks    424.6 µs      │ 840 µs        │ 604.2 µs      │ 625.8 µs      │ 100     │ 100
+//! │  ├─ 8 reader tasks, 8 writer tasks    614.2 µs      │ 1.504 ms      │ 739.9 µs      │ 753.9 µs      │ 100     │ 100
+//! │  ├─ 16 reader tasks, 16 writer tasks  1.526 ms      │ 4.074 ms      │ 1.794 ms      │ 1.867 ms      │ 100     │ 100
+//! │  ├─ 32 reader tasks, 32 writer tasks  4.036 ms      │ 7.58 ms       │ 5.371 ms      │ 5.58 ms       │ 100     │ 100
+//! │  ╰─ 64 reader tasks, 64 writer tasks  9.776 ms      │ 14.55 ms      │ 11.65 ms      │ 11.73 ms      │ 100     │ 100
 //! ╰─ write_while_reading_rcu_box                        │               │               │               │         │
-//!    ├─ 1 reader tasks, 1 writer tasks    494.8 µs      │ 1.73 ms       │ 570.5 µs      │ 628.4 µs      │ 100     │ 100
-//!    ├─ 1 reader tasks, 8 writer tasks    801.8 µs      │ 7.725 ms      │ 2.019 ms      │ 2.388 ms      │ 100     │ 100
-//!    ├─ 1 reader tasks, 16 writer tasks   872.4 µs      │ 73.89 ms      │ 1.671 ms      │ 3.982 ms      │ 100     │ 100
-//!    ├─ 1 reader tasks, 32 writer tasks   931.4 µs      │ 194 ms        │ 4.074 ms      │ 21.04 ms      │ 100     │ 100
-//!    ├─ 1 reader tasks, 64 writer tasks   1.056 ms      │ 199 ms        │ 4.969 ms      │ 42.72 ms      │ 100     │ 100
-//!    ├─ 2 reader tasks, 2 writer tasks    648.5 µs      │ 1.945 ms      │ 818.2 µs      │ 864.3 µs      │ 100     │ 100
-//!    ├─ 4 reader tasks, 8 writer tasks    1.44 ms       │ 9.372 ms      │ 2.512 ms      │ 2.869 ms      │ 100     │ 100
-//!    ├─ 8 reader tasks, 8 writer tasks    2.514 ms      │ 6.697 ms      │ 2.94 ms       │ 3.121 ms      │ 100     │ 100
-//!    ├─ 16 reader tasks, 16 writer tasks  6.412 ms      │ 17.66 ms      │ 6.888 ms      │ 7.19 ms       │ 100     │ 100
-//!    ├─ 32 reader tasks, 32 writer tasks  10.35 ms      │ 41.39 ms      │ 13.26 ms      │ 13.1 ms       │ 100     │ 100
-//!    ╰─ 64 reader tasks, 64 writer tasks  15.94 ms      │ 29.01 ms      │ 19.01 ms      │ 19.01 ms      │ 100     │ 100
+//!    ├─ 1 reader tasks, 1 writer tasks    48.67 µs      │ 126.9 µs      │ 76.41 µs      │ 77.36 µs      │ 100     │ 100
+//!    ├─ 1 reader tasks, 8 writer tasks    207.3 µs      │ 425.2 µs      │ 236.1 µs      │ 243.1 µs      │ 100     │ 100
+//!    ├─ 1 reader tasks, 16 writer tasks   351.7 µs      │ 441.1 µs      │ 383.9 µs      │ 386.9 µs      │ 100     │ 100
+//!    ├─ 1 reader tasks, 32 writer tasks   583.8 µs      │ 897.3 µs      │ 709.2 µs      │ 712.1 µs      │ 100     │ 100
+//!    ├─ 1 reader tasks, 64 writer tasks   1.228 ms      │ 1.867 ms      │ 1.367 ms      │ 1.404 ms      │ 100     │ 100
+//!    ├─ 2 reader tasks, 2 writer tasks    165 µs        │ 243.5 µs      │ 188.7 µs      │ 198.3 µs      │ 100     │ 100
+//!    ├─ 4 reader tasks, 8 writer tasks    302.6 µs      │ 404 µs        │ 346.2 µs      │ 349.6 µs      │ 100     │ 100
+//!    ├─ 8 reader tasks, 8 writer tasks    374.2 µs      │ 465.7 µs      │ 419.7 µs      │ 420.7 µs      │ 100     │ 100
+//!    ├─ 16 reader tasks, 16 writer tasks  683.9 µs      │ 762.8 µs      │ 725.4 µs      │ 726.6 µs      │ 100     │ 100
+//!    ├─ 32 reader tasks, 32 writer tasks  1.089 ms      │ 127.5 ms      │ 3.071 ms      │ 11.97 ms      │ 100     │ 100
+//!    ╰─ 64 reader tasks, 64 writer tasks  2.04 ms       │ 136.3 ms      │ 3.375 ms      │ 14.71 ms      │ 100     │ 100
 //! ```
 //!
 //! as you can see, `tokio_rcu`'s reads are faster than `arc_swap`'s reads (about 9x-40x faster on average), while `tokio_rcu`'s writes
