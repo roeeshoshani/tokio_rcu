@@ -206,23 +206,18 @@
 //!    ╰─ 64 reader tasks, 64 writer tasks  2.04 ms       │ 136.3 ms      │ 3.375 ms      │ 14.71 ms      │ 100     │ 100
 //! ```
 //!
-//! as you can see, `tokio_rcu`'s reads are faster than `arc_swap`'s reads (about 9x-40x faster on average), while `tokio_rcu`'s writes
-//! are slower than `arc_swap`'s writes (about 2x slower on average). for a read-heavy situation, this is ideal.
+//! as you can see, `tokio_rcu`'s reads are faster than `arc_swap`'s reads (about 20x-40x faster on average).
+//! furthermore, even `tokio_rcu`'s writes are faster than `arc_swap`'s writes, by a small margin (about 2x faster on average).
 //!
 //! furthermore, note that when using `arc_swap`, the time it takes for a single read operation seems to scale with the number of
-//! concurrent readers (see the results of the `arc_swap_read_only` and `arc_swap_read_while_writing` benchmarks), while `tokio_rcu`'s
+//! concurrent readers (see the results of the `read_only_arc_swap` and `read_while_writing_arc_swap` benchmarks), while `tokio_rcu`'s
 //! read operation takes roughly the same amount of time regardless of the number of concurrent readers, up until the point where there
 //! are more readers than cpu cores (more than 20 reader tasks), at which point the readers start sharing cpu cores and competing for
 //! their runtime, which obviously takes its toll on the performance.
 //!
 //! also note that this constant time for the read operation holds even when writers are concurrently modifying the data - the time
-//! spent on a single read operation remains roughly the same (see `rcu_box_read_while_writing`), unlike `arc_swap` (see
-//! `arc_swap_read_while_writing`).
-//!
-//! moreover, while `tokio_rcu`'s writes are slower, it is mostly because the writers are sleeping while waiting for other threads to
-//! pass through a quiescent state, so they are NOT slower in the sense that they perform more cpu-bound work, only in the total time it
-//! takes for a swap operation to complete after fully awaiting it. in practice the writes may actually spend less cpu time than
-//! `arc_swap`'s write.
+//! spent on a single read operation remains roughly the same (see `read_while_writing_rcu_box`), unlike `arc_swap` (see
+//! `read_while_writing_arc_swap`).
 //!
 //! # testing
 //!
