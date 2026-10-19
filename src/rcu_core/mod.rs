@@ -37,6 +37,25 @@ use crate::{
 /// must only be used as the data of the [`GRACE_PERIODS_SERIALIZATION_MUTEX`] mutex.
 struct GPSerializationMutexMarker;
 
+/// the identifier of a grace period operation.
+///
+/// every grace period operations allocates an id for itself by incrementing [`GP_STARTED_COUNTER`].
+///
+/// this id is then used to refer to the different grace period operations.
+///
+/// specifically, the ordering between the gp id values is important - a greater gp id value refers to a grace period that started later in time
+/// than some other earlier gp operation.
+pub type GpId = cfg_select! {
+    feature = "test_mode" => {
+        // in test mode, make this small to trigger overflow
+        u8
+    }
+    _ => {
+        // for the default case, use `usize` which is the biggest type we can assume is atomic-able, while remaining rather portable.
+        usize
+    }
+};
+
 static_or_loom_lazy_static! {
     /// a mutex which serializes grace period operations.
     ///
@@ -77,12 +96,12 @@ static_or_loom_lazy_static! {
     ///
     /// these allocated gp id values are then published to [`GP_FINISHED_COUNTER`] when a waiter finishes performing a grace period. that way the
     /// waiter can report which gp ids have been waiter for - all those lower than or equal to the published value.
-    static GP_STARTED_COUNTER: Atomic<usize> = Atomic::<usize>::new(0);
+    static GP_STARTED_COUNTER: Atomic<GpId> = Atomic::<GpId>::new(0);
 
     /// a counter published whenever a full grace period operation is performed. the value published is a gp id value sampled from
     /// [`GP_STARTED_COUNTER`] before the gp operation started, and the published value reports which gp ids have been waiter for - all those
     /// lower than or equal to the published value.
-    static GP_FINISHED_COUNTER: Atomic<usize> = Atomic::<usize>::new(0);
+    static GP_FINISHED_COUNTER: Atomic<GpId> = Atomic::<GpId>::new(0);
 }
 
 /// this function just performs an SC fence, but it provides special guarantees when performed directly after modifying the global
@@ -129,7 +148,7 @@ pub async fn synchronize_rcu() {
                 // calculate our post increment gp counter value
                 let my_gp_counter = prev_value + 1;
 
-                if unlikely(my_gp_counter == usize::MAX) {
+                if unlikely(my_gp_counter == GpId::MAX) {
                     // our increment caused the counter to reach its max, begin a reset operation.
                     // note that since we are the one who actually performed the exact increment from MAX-1 to MAX, we are the "leader" of the
                     // reset operation, and we do the work for everyone else, and then notify them once we're done.
