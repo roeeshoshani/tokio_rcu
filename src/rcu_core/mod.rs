@@ -65,7 +65,15 @@ static_or_loom_lazy_static! {
     /// a grace period using his pre-reset gp counter value.
     static GP_COUNTERS_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
-    // TODO: docs
+    /// when a thread increments the gp started counter to its max value, that thread begins a reset operation.
+    /// while that thread was incrementing the counter, another thread may have also been incrementing the counter, and also saw that it
+    /// reached its max value. so, that thread also begins the reset operation.
+    ///
+    /// in practice, the reset is actually only performed by a single thread - the leader, and all other threads that entered reset just wait
+    /// for him to finish resetting.
+    ///
+    /// so, this notification is used by the leader of a reset operation to notify all other threads that have also entered reset that the reset
+    /// operation is done.
     static GP_COUNTERS_RESET_DONE: Notify = Notify::new();
 
     // TODO
