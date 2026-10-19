@@ -49,12 +49,24 @@ static_or_loom_lazy_static! {
     static GP_SERIALIZATION_MUTEX: tokio::sync::Mutex<GPSerializationMutexMarker> =
         tokio::sync::Mutex::const_new(GPSerializationMutexMarker);
 
-    // TODO
-    static GP_COUNTER_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+    /// a lock used to synchronize the reset operation of the gp counters.
+    /// a reset operation is performed when the gp counters overflow, in order to reset the gp counters back to zero.
+    ///
+    /// when some thread increments the gp started counter and causes it to reach its max value, that thread begins a reset operation.
+    /// for resetting the gp counters, the thread must reset the global reset counters back to zero while blocking any further increments
+    /// of the counters.
+    ///
+    /// in order to prevent the further increments of the counters during the reset operation, this lock is used.
+    /// all incrementors of the counters lock it for reading before incrementing, and during the reset operation, the leader of the reset (the
+    /// first one to increment the counter to its max value) locks this lock for writing, thus preventing any new incrementors from
+    /// incrementing the counters.
+    ///
+    /// this also ensures that we don't start performing a reset operation while some incrementor thread is still in the middle of performing
+    /// a grace period using his pre-reset gp counter value.
+    static GP_COUNTERS_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
 
     // TODO: docs
-    // TODO: should i re-use my old notify code? is it better performing?
-    static GP_COUNTER_RESET_FINISHED: Notify = Notify::new();
+    static GP_COUNTERS_RESET_DONE: Notify = Notify::new();
 
     // TODO
     static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
@@ -88,8 +100,11 @@ fn post_epoch_id_modification_sc_fence() {
 /// once this function returns, it is guaranteed that any rcu-protected piece of data that was made unreachable (e.g. by swapping it with
 /// another piece of data) before calling this function is now no longer used by any thread in the process, including the current thread.
 pub async fn synchronize_rcu() {
-    let mut reset_sync_read_guard = GP_COUNTER_RESET_SYNC_LOCK.read().await;
+    // before doing anything, lock the gp counters reset sync lock for reading, to make sure that we don't start until any currently ongoing
+    // reset operations is finished, and to make sure that during our operation, no reset operation will suddenly begin.
+    let mut reset_sync_read_guard = GP_COUNTERS_RESET_SYNC_LOCK.read().await;
 
+    // increment the gp counter, while properly handling the overflow case.
     let my_gp_counter = 'inc_gp_loop: loop {
         match GP_STARTED_COUNTER.try_update(
             // TODO: ordering
@@ -99,33 +114,59 @@ pub async fn synchronize_rcu() {
             |v| v.checked_add(1),
         ) {
             Ok(prev_value) => {
+                // calculate our post increment gp counter value
                 let my_gp_counter = prev_value + 1;
 
                 if my_gp_counter == usize::MAX {
+                    // our increment caused the counter to reach its max, begin a reset operation.
+                    // note that since we are the one who actually performed the exact increment from MAX-1 to MAX, we are the "leader" of the
+                    // reset operation, and we do the work for everyone else, and then notify them once we're done.
+
+                    // re-lock the reset sync lock for writing.
+                    //
+                    // this ensures that any existing gp waiters finish their gp, and that new waiters block until we finish, so we have absolute
+                    // exclusive access over the global state during the reset operation.
+                    //
+                    // once this the reset sync lock is write-locked, every other waiter is in one of two possible states:
+                    // - just started the gp operation and is blocked waiting for the initial read lock operation of the reset sync lock.
+                    // - entered "slave" reset mode, and is blocked waiting for a reset done notification from us.
                     drop(reset_sync_read_guard);
-                    let reset_sync_write_guard = GP_COUNTER_RESET_SYNC_LOCK.write().await;
-                    GP_STARTED_COUNTER.store(
-                        0,
-                        // TODO
-                        atomic::Ordering::Relaxed,
-                    );
-                    GP_FINISHED_COUNTER.store(
-                        0,
-                        // TODO
-                        atomic::Ordering::Relaxed,
-                    );
+                    let reset_sync_write_guard = GP_COUNTERS_RESET_SYNC_LOCK.write().await;
+
+                    // reset both counters back to 0. no ordering is needed, the reset sync lock provides the synchronization for us here, it basically
+                    // ensures exclusivity.
+                    GP_STARTED_COUNTER.store(0, atomic::Ordering::Relaxed);
+                    GP_FINISHED_COUNTER.store(0, atomic::Ordering::Relaxed);
+
+                    // release the guard, letting new waiters enter and start incrementing.
                     drop(reset_sync_write_guard);
-                    reset_sync_read_guard = GP_COUNTER_RESET_SYNC_LOCK.read().await;
-                    GP_COUNTER_RESET_FINISHED.notify();
+
+                    // tell all other waiters who entered reset mode with us that the reset operation is done.
+                    GP_COUNTERS_RESET_DONE.notify();
+
+                    // re-grab the reset sync lock for reading, so we can re-try the increment
+                    reset_sync_read_guard = GP_COUNTERS_RESET_SYNC_LOCK.read().await;
                 } else {
+                    // hurray! we got a valid, non overflow, gp counter value, to identify our grace period operation.
                     break my_gp_counter;
                 }
             }
             Err(_) => {
-                let reset_finished = GP_COUNTER_RESET_FINISHED.notified();
+                // the gp started counter is already at max. in this case, there must be an ongoing reset operation happening.
+                // so, we need to wait for it to finish, then retry.
+
+                // dropping the reset sync read guard will allow the reset leader to enter his critical section. before doing that, we must first
+                // start listening to notifications from him, so that we don't miss his reset done notification.
+                let reset_done = GP_COUNTERS_RESET_DONE.notified();
+
+                // drop the guard, letting the leader begin his operation.
                 drop(reset_sync_read_guard);
-                reset_finished.await;
-                reset_sync_read_guard = GP_COUNTER_RESET_SYNC_LOCK.read().await;
+
+                // wait for the leader to finish and to notify us
+                reset_done.await;
+
+                // re-grab the reset sync lock for reading and re-try the increment
+                reset_sync_read_guard = GP_COUNTERS_RESET_SYNC_LOCK.read().await;
                 continue 'inc_gp_loop;
             }
         };
@@ -173,7 +214,8 @@ pub async fn synchronize_rcu() {
     // this makes sure that the guard is help up until this point and is not accidentally dropped earlier than needed.
     drop(gp_serialization_guard);
 
-    // TODO: explain
+    // the reset sync guard must be held all the way up to this point, as it is assumed to be protecting the entire grace period operation,
+    // to prevent any reset operation from starting while we are using pre-reset gp counter values.
     drop(reset_sync_read_guard);
 }
 
