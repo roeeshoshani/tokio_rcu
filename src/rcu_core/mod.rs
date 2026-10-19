@@ -107,9 +107,11 @@ pub async fn synchronize_rcu() {
     // increment the gp counter, while properly handling the overflow case.
     let my_gp_counter = 'inc_gp_loop: loop {
         match GP_STARTED_COUNTER.try_update(
-            // TODO: ordering
-            atomic::Ordering::Relaxed,
-            // TODO: ordering
+            // for the set part, use release ordering to make sure that any gp performer that loads this value actually also performs the gp for us.
+            // this makes sure that the aforementioned gp performer will see all writes performed by us before he starts performing his grace period,
+            // which is exactly what we need to ensure that his gp also applies to us.
+            atomic::Ordering::Release,
+            // no ordering needed for the fetch - we are not ordering anything against older waiters here.
             atomic::Ordering::Relaxed,
             |v| v.checked_add(1),
         ) {
@@ -177,10 +179,14 @@ pub async fn synchronize_rcu() {
 
     // check if someone already did the work for us
     let gp_finished_counter = GP_FINISHED_COUNTER.load(
-        // TODO: ordering
+        // no ordering needed here, instead we use a fence only when the ordering is really needed.
         atomic::Ordering::Relaxed,
     );
     if gp_finished_counter >= my_gp_counter {
+        // we need acquire ordering to ensure that we actually see all gp related operations performed by whoever performed the gp for us, so that
+        // the gp is actually performed for us.
+        atomic::fence(atomic::Ordering::Acquire);
+
         // since we are not the ones who did the work, it is expected that the finished counter is actually greater than our counter in this case,
         // and never equal.
         debug_assert_ne!(gp_finished_counter, my_gp_counter);
@@ -198,8 +204,9 @@ pub async fn synchronize_rcu() {
     // them as well, and give them the memory ordering guarantees that they need in regards to writes performed by them before they started the grace
     // period.
     let gp_started_counter = GP_STARTED_COUNTER.load(
-        // TODO: ordering (this should probably be relaxed, see comment above)
-        atomic::Ordering::Relaxed,
+        // we need acquire ordering to make sure that wee see all writes performed by other gp waiters before they started their gp, so that we
+        // can perform the gp for them as well.
+        atomic::Ordering::Acquire,
     );
 
     synchronize_rcu_serialized(&gp_serialization_guard).await;
@@ -207,8 +214,10 @@ pub async fn synchronize_rcu() {
     // publish the fact that we finished the gp for all the waiters included in our gp started counter read.
     GP_FINISHED_COUNTER.store(
         gp_started_counter,
-        // TODO: ordering
-        atomic::Ordering::Relaxed,
+        // use release ordering, paired with acquire ordering in loaders who check if we performed the gp for them.
+        // this makes sure that if another waiter sees we performed the gp for them, he actually sees all writes performed by us during the gp
+        // operation, which ensures he actually sees the gp operation.
+        atomic::Ordering::Release,
     );
 
     // this makes sure that the guard is help up until this point and is not accidentally dropped earlier than needed.
