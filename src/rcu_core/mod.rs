@@ -133,7 +133,7 @@ pub async fn synchronize_rcu() {
                 // calculate our post increment gp counter value
                 let my_gp_counter = prev_value + 1;
 
-                if my_gp_counter == usize::MAX {
+                if unlikely(my_gp_counter == usize::MAX) {
                     // our increment caused the counter to reach its max, begin a reset operation.
                     // note that since we are the one who actually performed the exact increment from MAX-1 to MAX, we are the "leader" of the
                     // reset operation, and we do the work for everyone else, and then notify them once we're done.
