@@ -207,7 +207,7 @@
 //! ```
 //!
 //! as you can see, `tokio_rcu`'s reads are faster than `arc_swap`'s reads (about 20x-40x faster on average).
-//! furthermore, even `tokio_rcu`'s writes are faster than `arc_swap`'s writes, by a small margin (about 2x faster on average).
+//! furthermore, `tokio_rcu`'s writes are faster than `arc_swap`'s writes, by a small margin (about 2x faster on average).
 //!
 //! furthermore, note that when using `arc_swap`, the time it takes for a single read operation seems to scale with the number of
 //! concurrent readers (see the results of the `read_only_arc_swap` and `read_while_writing_arc_swap` benchmarks), while `tokio_rcu`'s
