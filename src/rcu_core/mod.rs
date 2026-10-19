@@ -47,6 +47,13 @@ static_or_loom_lazy_static! {
         tokio::sync::Mutex::const_new(GPSerializationMutexMarker);
 
     // TODO
+    static GP_COUNTER_RESET_SYNC_LOCK: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+    // TODO: docs
+    // TODO: should i re-use my old notify code? is it better performing?
+    static GP_COUNTER_RESET_FINISHED: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+    // TODO
     static GP_STARTED_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
     // TODO
@@ -78,12 +85,48 @@ fn post_epoch_id_modification_sc_fence() {
 /// once this function returns, it is guaranteed that any rcu-protected piece of data that was made unreachable (e.g. by swapping it with
 /// another piece of data) before calling this function is now no longer used by any thread in the process, including the current thread.
 pub async fn synchronize_rcu() {
-    // TODO: handle overflow
-    let my_gp_counter = GP_STARTED_COUNTER.fetch_add(
-        1,
-        // TODO: ordering (this should probably be release, see comment when reloading this counter)
-        atomic::Ordering::Relaxed,
-    ) + 1;
+    let mut reset_sync_read_guard = GP_COUNTER_RESET_SYNC_LOCK.read().await;
+
+    let my_gp_counter = 'inc_gp_loop: loop {
+        match GP_STARTED_COUNTER.try_update(
+            // TODO: ordering
+            atomic::Ordering::Relaxed,
+            // TODO: ordering
+            atomic::Ordering::Relaxed,
+            |v| v.checked_add(1),
+        ) {
+            Ok(prev_value) => {
+                let my_gp_counter = prev_value + 1;
+
+                if my_gp_counter == usize::MAX {
+                    drop(reset_sync_read_guard);
+                    let reset_sync_write_guard = GP_COUNTER_RESET_SYNC_LOCK.write().await;
+                    GP_STARTED_COUNTER.store(
+                        0,
+                        // TODO
+                        atomic::Ordering::Relaxed,
+                    );
+                    GP_FINISHED_COUNTER.store(
+                        0,
+                        // TODO
+                        atomic::Ordering::Relaxed,
+                    );
+                    drop(reset_sync_write_guard);
+                    reset_sync_read_guard = GP_COUNTER_RESET_SYNC_LOCK.read().await;
+                    GP_COUNTER_RESET_FINISHED.notify_waiters();
+                } else {
+                    break my_gp_counter;
+                }
+            }
+            Err(_) => {
+                let reset_finished = GP_COUNTER_RESET_FINISHED.notified();
+                drop(reset_sync_read_guard);
+                reset_finished.await;
+                reset_sync_read_guard = GP_COUNTER_RESET_SYNC_LOCK.read().await;
+                continue 'inc_gp_loop;
+            }
+        };
+    };
 
     // enter the critical section which is serialized between all tasks waiting for grace periods.
     let gp_serialization_guard = GP_SERIALIZATION_MUTEX.lock().await;
@@ -126,6 +169,9 @@ pub async fn synchronize_rcu() {
 
     // this makes sure that the guard is help up until this point and is not accidentally dropped earlier than needed.
     drop(gp_serialization_guard);
+
+    // TODO: explain
+    drop(reset_sync_read_guard);
 }
 
 /// actually performs the core logic of the grace period operation, which must be serialized using the [`GRACE_PERIODS_SERIALIZATION_MUTEX`] mutex
