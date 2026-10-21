@@ -85,10 +85,10 @@ impl<T> RcuBox<T> {
         }
     }
 
-    /// reads the rcu box, returning a read guard to the data it currently contains.
+    /// reads the rcu box, returning a reference to the data it currently contains.
     ///
-    /// the lifetime of the returned guard is bound to the lifetime of the provided [`RcuReadLockGuard`], which ensures correct use of the
-    /// returned guard.
+    /// the lifetime of the returned reference is bound to the lifetime of the provided [`RcuReadLockGuard`], which ensures correct use of the
+    /// returned reference.
     ///
     /// # Performance
     ///
