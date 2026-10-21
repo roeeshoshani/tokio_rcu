@@ -3,11 +3,8 @@
 use crossbeam_utils::CachePadded;
 
 use crate::{
-    loom::{fn_const_if_not_loom, static_or_loom_lazy_static},
-    rcu_core::{
-        epoch::{EPOCH_ID_MIN, EpochId},
-        notify::Notify,
-    },
+    loom::{fn_const_if_not_loom, static_or_loom_lazy_static, std::sync::atomic::AtomicBool},
+    rcu_core::epoch::{EPOCH_ID_MIN, EpochId},
     utils::atomic_type::Atomic,
 };
 
@@ -20,11 +17,6 @@ use crate::{
 /// fast path where no rcu grace period is performed, the quiescent state logic is mostly read only with regard to shared data, and there is no
 /// false sharing that is slowing it down.
 struct QsReadMostlyData {
-    /// a notification which is notified when threads update their last seen epoch id or change their status in any other meaningful
-    /// way (e.g. become non-busy). used by waiters to wait for notifications in a blocking manner while waiting for threads to see
-    /// their new epoch id, instead of constantly busy polling all threads.
-    thread_epoch_updated_notify: Notify,
-
     /// the current global epoch id.
     /// its value must always be a valid epoch id value.
     ///
@@ -32,17 +24,26 @@ struct QsReadMostlyData {
     /// value and publish their last seen epoch id.
     /// a waiter can then increment it and wait until all threads see his increment in their last seen epoch id value.
     cur_epoch_id: Atomic<EpochId>,
+
+    /// a hint on whether there currently is any subscriber to the epoch id update notifications.
+    ///
+    /// if this reads as false, notifiers can assume that there is no currently active subscriber and can just do nothing.
+    /// if this reads as true, there may or may not actually be an active subscriber, but notifiers must manually check `SUBSCRIBER_INFO` to see.
+    ///
+    /// this is used as an optimization, so that in the case where there is no active subscriber, the notify operations is read only, and does not
+    /// perform any writes to shared memory, which keeps it extremely fast, especially when multiple cpu cores simultaneously perform many notify
+    /// operations.
+    epoch_id_update_notifications_has_subscriber: AtomicBool,
 }
 impl QsReadMostlyData {
     fn_const_if_not_loom! {
         const fn new() -> Self {
             Self {
-                thread_epoch_updated_notify: Notify::new(),
-
                 // we start with MIN+2 instead of just MIN since MIN is used as a "reset value", used during an epoch id reset operation to
                 // track which threads saw the reset value. we don't want the initial value to look like a reset value, since that could cause
                 // a stale epoch id value sampled at the start of the program to look like a reset value.
                 cur_epoch_id: Atomic::<EpochId>::new(EPOCH_ID_MIN + 2),
+                epoch_id_update_notifications_has_subscriber: AtomicBool::new(false),
             }
         }
     }
@@ -50,13 +51,14 @@ impl QsReadMostlyData {
 
 /// accessor to the field inside the qs read mostly data object.
 #[inline(always)]
-pub fn thread_epoch_updated_notify() -> &'static Notify {
-    &QS_READ_MOSTLY_DATA.thread_epoch_updated_notify
-}
-/// accessor to the field inside the qs read mostly data object.
-#[inline(always)]
 pub fn cur_epoch_id() -> &'static Atomic<EpochId> {
     &QS_READ_MOSTLY_DATA.cur_epoch_id
+}
+
+/// accessor to the field inside the qs read mostly data object.
+#[inline(always)]
+pub fn epoch_id_update_notifications_has_subscriber() -> &'static AtomicBool {
+    &QS_READ_MOSTLY_DATA.epoch_id_update_notifications_has_subscriber
 }
 
 static_or_loom_lazy_static! {

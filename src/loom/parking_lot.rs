@@ -1,3 +1,5 @@
+use std::ops::{Deref, DerefMut};
+
 use crate::loom::fn_const_if_not_loom;
 
 #[cfg(not(loom))]
@@ -69,14 +71,14 @@ impl<T> RwLock<T> {
         #[cfg(not(loom))]
         {
             RwLockReadGuard {
-                _inner: self.0.read(),
+                inner: self.0.read(),
             }
         }
 
         #[cfg(loom)]
         {
             RwLockReadGuard {
-                _inner: self.0.read().unwrap(),
+                inner: self.0.read().unwrap(),
             }
         }
     }
@@ -87,14 +89,14 @@ impl<T> RwLock<T> {
         #[cfg(not(loom))]
         {
             RwLockWriteGuard {
-                _inner: self.0.write(),
+                inner: self.0.write(),
             }
         }
 
         #[cfg(loom)]
         {
             RwLockWriteGuard {
-                _inner: self.0.write().unwrap(),
+                inner: self.0.write().unwrap(),
             }
         }
     }
@@ -107,7 +109,14 @@ type InnerRwLockReadGuard<'a, T> = loom::sync::RwLockReadGuard<'a, T>;
 
 /// a loom/std abstraction over parking lot's [`RwLockReadGuard`](parking_lot::RwLockReadGuard).
 pub struct RwLockReadGuard<'a, T> {
-    _inner: InnerRwLockReadGuard<'a, T>,
+    inner: InnerRwLockReadGuard<'a, T>,
+}
+impl<'a, T> Deref for RwLockReadGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
 }
 
 #[cfg(not(loom))]
@@ -117,5 +126,17 @@ type InnerRwLockWriteGuard<'a, T> = loom::sync::RwLockWriteGuard<'a, T>;
 
 /// a loom/std abstraction over parking lot's [`RwLockWriteGuard`](parking_lot::RwLockWriteGuard).
 pub struct RwLockWriteGuard<'a, T> {
-    _inner: InnerRwLockWriteGuard<'a, T>,
+    inner: InnerRwLockWriteGuard<'a, T>,
+}
+impl<'a, T> Deref for RwLockWriteGuard<'a, T> {
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+impl<'a, T> DerefMut for RwLockWriteGuard<'a, T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.deref_mut()
+    }
 }

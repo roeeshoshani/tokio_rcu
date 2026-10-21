@@ -360,12 +360,12 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
 }
 
 /// a test where one thread reads the value and one thread swaps it, and then the writer swaps the value, he immediately
-/// reaches the reset epoch id and starts performing a reset operation.
+/// reaches the reset epoch id and starts performing an epoch id reset operation.
 ///
 /// this test covers both the just-waking thread case, the just-starting thread case, and the already-running thread case,
-/// all during a reset operation.
+/// all during an epoch id reset operation.
 #[test]
-fn read_and_write_with_reset() {
+fn read_and_write_with_epoch_id_reset() {
     #[derive(Debug, Default, PartialEq, Eq, Clone, Copy)]
     struct Results {
         saw_id0: bool,
@@ -376,7 +376,7 @@ fn read_and_write_with_reset() {
         let results = results.clone();
         move || {
             tokio_rcu::loom_tests_api::epoch_id_set(
-                tokio_rcu::loom_tests_api::EPOCH_ID_MAX - 2,
+                tokio_rcu::loom_tests_api::EPOCH_ID_MAX,
                 std::sync::atomic::Ordering::Relaxed,
             );
 
