@@ -57,20 +57,25 @@ fn rcu_read_lock_from_main_thread_after_runtime_finished() {
 
 #[test]
 fn rcu_synchronize_inside_rcu_read_lock_by_manually_polling_never_finishes() {
+    const NUM_POLLS: usize = cfg_select! {
+        miri => 300,
+        _ => 10_000,
+    };
+
     rcu_block_on(async {
         rcu_read_lock(|_guard| {
             let swap_future = synchronize_rcu();
             let mut swap_future_pin = pin!(swap_future);
             let mut cx = std::task::Context::from_waker(Waker::noop());
 
-            for _ in 0..10_000 {
+            for _ in 0..NUM_POLLS {
                 assert_eq!(swap_future_pin.as_mut().poll(&mut cx), Poll::Pending);
             }
 
             // even if we wait a while and try again, this should never finish
             std::thread::sleep(Duration::from_millis(100));
 
-            for _ in 0..10_000 {
+            for _ in 0..NUM_POLLS {
                 assert_eq!(swap_future_pin.as_mut().poll(&mut cx), Poll::Pending);
             }
         });
