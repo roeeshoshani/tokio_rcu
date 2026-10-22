@@ -49,7 +49,7 @@ fn stress_no_uaf() {
                                 let guard = unsafe { RcuReadLockGuard::new() };
                                 let value = data.read(&guard);
 
-                                let orig_value: String = black_box(black_box(&*value).clone());
+                                let orig_value: String = black_box(black_box(value).clone());
 
                                 // make sure that the string is one of the valid options.
                                 // the writers overwrite the data of old strings with invalid contents, so that if we happen
@@ -58,7 +58,7 @@ fn stress_no_uaf() {
 
                                 // use the value for a while to try to trigger some UAFs.
                                 for _ in 0..READER_NUM_CLONES {
-                                    let cloned_value = black_box(black_box(&*value).clone());
+                                    let cloned_value = black_box(black_box(value).clone());
 
                                     // the same guard should always yield the same data.
                                     assert_eq!(orig_value, cloned_value);
@@ -162,7 +162,7 @@ fn stress_no_uaf_with_sleeps() {
                                 let guard = unsafe { RcuReadLockGuard::new() };
                                 let value = data.read(&guard);
 
-                                let orig_value: String = black_box(black_box(&*value).clone());
+                                let orig_value: String = black_box(black_box(value).clone());
 
                                 // make sure that the string is one of the valid options.
                                 // the writers overwrite the data of old strings with invalid contents, so that if we happen
@@ -171,7 +171,7 @@ fn stress_no_uaf_with_sleeps() {
 
                                 // use the value for a while to try to trigger some UAFs.
                                 for _ in 0..READER_NUM_CLONES {
-                                    let cloned_value = black_box(black_box(&*value).clone());
+                                    let cloned_value = black_box(black_box(value).clone());
 
                                     // the same guard should always yield the same data.
                                     assert_eq!(orig_value, cloned_value);
@@ -374,7 +374,7 @@ fn stress_double_buffering() {
                                 let guard = unsafe { RcuReadLockGuard::new() };
                                 let value = data.read(&guard);
 
-                                let orig_value: Buffer = black_box(black_box(&*value).clone());
+                                let orig_value: Buffer = black_box(black_box(value).clone());
 
                                 assert!(
                                     orig_value.buffer_index == 0 || orig_value.buffer_index == 1
@@ -382,7 +382,7 @@ fn stress_double_buffering() {
 
                                 // use the value for a while to try to trigger some UAFs.
                                 for _ in 0..READER_NUM_CLONES {
-                                    let cloned_value = black_box(black_box(&*value).clone());
+                                    let cloned_value = black_box(black_box(value).clone());
 
                                     // the same guard should always yield the same data.
                                     assert_eq!(orig_value, cloned_value);
