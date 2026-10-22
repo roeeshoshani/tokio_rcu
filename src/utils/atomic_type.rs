@@ -108,3 +108,77 @@ impl_atomic_type! {u8, AtomicU8}
 impl_atomic_type! {u16, AtomicU16}
 impl_atomic_type! {u32, AtomicU32}
 impl_atomic_type! {usize, AtomicUsize}
+
+/// a generic wrapper around atomic pointer types which provides an abstraction over the std and loom interfaces, specifically
+/// tailored to the use of atomic pointers in this crate.
+pub struct AtomicPtr<T> {
+    inner: crate::loom::std::sync::atomic::AtomicPtr<T>,
+}
+
+#[allow(unused)]
+impl<T> AtomicPtr<T> {
+    fn_const_if_not_loom! {
+        /// creates a new atomic variable with the given initial value.
+        pub const fn new(initial_value: *mut T) -> Self {
+            Self {
+                inner: crate::loom::std::sync::atomic::AtomicPtr::<T>::new(initial_value),
+            }
+        }
+    }
+
+    /// returns the value stored in this atomic pointer using a regular, non-atomic load, given a `&mut self` which ensures exclusivity.
+    pub fn get(&mut self) -> *mut T {
+        #[cfg(loom)]
+        {
+            self.inner.with_mut(|x| *x)
+        }
+
+        #[cfg(not(loom))]
+        {
+            *self.inner.get_mut()
+        }
+    }
+
+    /// see [`AtomicPtr<T>::load`](crate::loom::std::sync::atomic::AtomicPtr<T>::load)
+    pub fn load(&self, ordering: atomic::Ordering) -> *mut T {
+        self.inner.load(ordering)
+    }
+
+    /// see [`AtomicPtr<T>::store`](crate::loom::std::sync::atomic::AtomicPtr<T>::store)
+    pub fn store(&self, new_value: *mut T, ordering: atomic::Ordering) {
+        self.inner.store(new_value, ordering)
+    }
+
+    /// see [`AtomicPtr<T>::swap`](crate::loom::std::sync::atomic::AtomicPtr<T>::swap)
+    pub fn swap(&self, new_value: *mut T, ordering: atomic::Ordering) -> *mut T {
+        self.inner.swap(new_value, ordering)
+    }
+
+    /// see [`AtomicPtr<T>::try_update`](crate::loom::std::sync::atomic::AtomicPtr<T>::try_update)
+    pub fn try_update(
+        &self,
+        set_order: atomic::Ordering,
+        fetch_order: atomic::Ordering,
+        f: impl FnMut(*mut T) -> Option<*mut T>,
+    ) -> Result<*mut T, *mut T> {
+        #[cfg(not(loom))]
+        {
+            self.inner.try_update(set_order, fetch_order, f)
+        }
+        #[cfg(loom)]
+        {
+            self.inner.fetch_update(set_order, fetch_order, f)
+        }
+    }
+
+    /// see [`AtomicPtr<T>::compare_exchange`](crate::loom::std::sync::atomic::AtomicPtr<T>::compare_exchange)
+    pub fn compare_exchange(
+        &self,
+        current: *mut T,
+        new: *mut T,
+        success: atomic::Ordering,
+        failure: atomic::Ordering,
+    ) -> Result<*mut T, *mut T> {
+        self.inner.compare_exchange(current, new, success, failure)
+    }
+}
