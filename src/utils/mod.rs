@@ -2,22 +2,6 @@ use std::marker::PhantomData;
 
 pub mod atomic_type;
 
-/// a phantom type which is not `Send`.
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
-pub struct PhantomUnsend {
-    phantom: PhantomData<*const ()>,
-}
-impl PhantomUnsend {
-    /// creates a new [`PhantomUnsend`] object.
-    #[inline(always)]
-    pub const fn new() -> Self {
-        Self {
-            phantom: PhantomData,
-        }
-    }
-}
-unsafe impl Sync for PhantomUnsend {}
-
 /// a phantom type which is not `Send` and not `Sync`.
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct PhantomUnsendUnsync {
