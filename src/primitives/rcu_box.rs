@@ -3,10 +3,10 @@
 //! the main type of this module is [`RcuBox`].
 
 use crate::{
-    loom::std::sync::atomic::{self, AtomicPtr},
+    loom::std::sync::atomic,
     primitives::rcu_waitable::RcuWaitable,
     rcu_core::RcuReadLockGuard,
-    utils::PtrMutSendSync,
+    utils::{PtrMutSendSync, atomic_type::AtomicPtr},
 };
 
 /// old data of an rcu box, returned after the box's contents were swapped to new ones.
@@ -137,7 +137,7 @@ impl<T> Drop for RcuBox<T> {
         // this is safe since we have a mut ref to self, which means we have exclusive access to it, so no concurrent threads can modify it.
         // furthermore, when loading the pointer we usually require acquire ordering, but here we don't need ordering, since the mechanism that
         // provides us with a mutable reference to self must already guarantee that we see all writes performed by previous users of this rcu box.
-        let ptr = *self.value_ptr.get_mut();
+        let ptr = self.value_ptr.get();
 
         // SAFETY: pointers are always valid by the invariants of this type.
         // furthermore, at this point we have a mutable reference to self, so no concurrent read guards could exist, and we
