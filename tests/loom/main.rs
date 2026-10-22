@@ -114,7 +114,7 @@ fn read_and_write() {
 
                     let first_seen_id = with_before_after_poll(|| {
                         rcu_read_lock(|rcu_read_lock_guard| {
-                            check_guard_logic(&state.read(rcu_read_lock_guard))
+                            check_guard_logic(state.read(rcu_read_lock_guard))
                         })
                     });
 
@@ -126,7 +126,7 @@ fn read_and_write() {
                     // re-poll after waking from sleep.
                     let second_seen_id = with_before_after_poll(|| {
                         rcu_read_lock(|rcu_read_lock_guard| {
-                            check_guard_logic(&state.read(rcu_read_lock_guard))
+                            check_guard_logic(state.read(rcu_read_lock_guard))
                         })
                     });
 
@@ -319,8 +319,7 @@ fn read_and_use_after_quiescent_state_causes_uaf() {
                 move || {
                     let rcu_read_lock_guard = unsafe { RcuReadLockGuard::new() };
                     let guard = with_before_after_poll(|| state.read(&rcu_read_lock_guard));
-                    let guard_ref: &UafDetector = &guard;
-                    let guard_ptr = guard_ref as *const UafDetector;
+                    let guard_ptr = guard as *const UafDetector;
                     if guard_ptr == uaf_detector0_ptr {
                         // the first UAF detector may actually be in a UAF situation.
                         // SAFETY: guard points to a heap allocation
@@ -421,7 +420,7 @@ fn read_and_write_with_epoch_id_reset() {
 
                     let first_seen_id = with_before_after_poll(|| {
                         rcu_read_lock(|rcu_read_lock_guard| {
-                            check_guard_logic(&state.read(rcu_read_lock_guard))
+                            check_guard_logic(state.read(rcu_read_lock_guard))
                         })
                     });
 
@@ -433,7 +432,7 @@ fn read_and_write_with_epoch_id_reset() {
                     // re-poll after waking from sleep.
                     let second_seen_id = with_before_after_poll(|| {
                         rcu_read_lock(|rcu_read_lock_guard| {
-                            check_guard_logic(&state.read(rcu_read_lock_guard))
+                            check_guard_logic(state.read(rcu_read_lock_guard))
                         })
                     });
 
